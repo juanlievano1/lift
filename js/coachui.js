@@ -20,7 +20,7 @@ const CHANGE_LABEL = {
 };
 
 const md = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
-const compactPlan = (p) => p && { name: p.name, days: p.days.map((d) => ({ name: d.name, exercises: d.exercises.map((e) => ({ name: e.name, sets: e.sets, muscle: e.muscle, kind: e.kind, sec: e.sec })) })) };
+const compactPlan = (p) => p && { name: p.name, rationale: p.rationale, days: p.days.map((d) => ({ name: d.name, focus: d.focus, exercises: d.exercises.map((e) => ({ name: e.name, sets: e.sets, muscle: e.muscle, kind: e.kind, sec: e.sec, repMin: e.repMin, repMax: e.repMax, rir: e.rir, restSec: e.restSec, notes: e.notes })) })) };
 const needAccount = () => `<section class="card"><h3>Coach con IA</h3><p class="muted">El coach necesita una cuenta. Esta copia funciona en modo local.</p></section>`;
 
 function bubbles(list, extra) {
@@ -65,11 +65,10 @@ export function viewCrear() {
   const conv = db().coach.interview;
   const hasPlans = db().plans.length > 0;
   main.innerHTML = `
-  <header class="top"><div>${hasPlans ? '<a class="link" href="#rutinas">← Planes</a>' : ''}<h1>Tu plan</h1><p class="muted small">Créalo conversando con el coach</p></div>
+  <header class="top"><div>${hasPlans ? '<a class="link" href="#rutinas">← Planes</a>' : ''}<h1>Ajustar plan</h1><p class="muted small">Dile al coach qué cambiar y lo rehace contigo</p></div>
     ${conv.length ? '<button class="btn ghost sm" data-act="restartInterview">Empezar de nuevo</button>' : ''}</header>
   <div class="chat">${bubbles(conv, (m, i) => (m.plan ? planProposal(m.plan, i, i === lastPlanIndex(conv)) : ''))}${waiting ? typing() : ''}</div>
-  ${composer('interview', 'Escribe tu respuesta…', conv.length ? [{ text: 'Encárgate tú, confío en ti' }, { text: 'Menos tiempo por sesión' }] : [])}
-  ${!hasPlans ? '<button class="link center-block" data-act="skipInterview">Prefiero generarlo al instante</button>' : ''}`;
+  ${composer('interview', 'Ej.: más brazo, no me gusta la sentadilla…', conv.length ? [{ text: 'Quiero más trabajo de brazos' }, { text: 'Cambia un ejercicio que no me gusta' }, { text: 'Tengo menos tiempo por sesión' }] : [])}`;
   bindComposer('interview', sendInterview);
   if (!conv.length && !waiting) sendInterview(null);
   else scrollEnd();
@@ -98,7 +97,8 @@ async function sendInterview(text) {
   waiting = true; viewCrear();
   try {
     const conv = db().coach.interview;
-    const last = conv[lastPlanIndex(conv)]?.plan || null;
+    // Parte del plan activo (creado al instante) hasta que el coach proponga uno nuevo.
+    const last = conv[lastPlanIndex(conv)]?.plan || activePlan() || null;
     const res = await cloud.coach('interview', {
       profile: db().profile,
       currentPlan: compactPlan(last),
@@ -379,15 +379,20 @@ Object.assign(actions, {
   sendChip: (el) => { if (waiting) return; (el.dataset.to === 'chat' ? sendChat : sendInterview)(el.dataset.text); },
   restartInterview: () => { if (!confirm('¿Empezar la conversación del plan desde cero?')) return; update((s) => (s.coach.interview = [])); viewCrear(); },
   newInterview: () => { if (db().coach.interview.length && !confirm('¿Empezar una conversación nueva para crear otro plan?')) return; update((s) => (s.coach.interview = [])); },
-  skipInterview: () => actions.choiceScience(),
   clearChat: () => { update((s) => (s.coach.chat = [])); viewCoach(); },
   usePlan: (el) => {
     const proposal = db().coach.interview[+el.dataset.i]?.plan;
     if (!proposal) return;
     const plan = withProgram({ id: uid(), source: 'ia', createdAt: new Date().toISOString(), nextDay: 0, reviews: [], ...clone(proposal), days: proposal.days.map((d) => ({ id: uid(), ...clone(d) })) }, 'fases');
-    update((s) => { s.plans.push(plan); s.activePlanId = plan.id; s.coach.interview = []; });
+    const prev = activePlan();
+    // Si el plan anterior aún no se ha entrenado, se reemplaza; si ya tiene entrenos, se guarda en "Otros planes".
+    const replace = prev && !db().sessions.some((x) => x.planId === prev.id);
+    update((s) => {
+      if (replace) s.plans = s.plans.filter((p) => p.id !== prev.id);
+      s.plans.push(plan); s.activePlanId = plan.id; s.coach.interview = []; s.coach.newPlanTip = false;
+    });
     cloud.publish('plan', { planName: plan.name, days: plan.days.length, source: 'ia' });
-    toast('¡Plan listo! Empieza tu semana 1');
+    toast(replace ? 'Plan actualizado con tus ajustes' : '¡Plan nuevo listo! Empieza tu semana 1');
     go('hoy');
   },
   applyChat: (el) => {

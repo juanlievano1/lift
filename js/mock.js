@@ -1,7 +1,7 @@
 // Servidor simulado SOLO para pruebas (?mock=1). Imita la API de cloud.js en el navegador:
 // cuentas, datos, amistades, actividad, fuerzas y respuestas de ejemplo del coach.
 
-import { generatePlan } from './science.js';
+import { generatePlan, GOALS, EXERCISES } from './science.js';
 
 const KEY = 'forja.mockdb';
 const SKEY = 'forja.mocksession';
@@ -127,12 +127,31 @@ export function mockBackend() {
 function mockCoach(action, p) {
   const name = p.profile?.name || 'crack';
   if (action === 'interview') {
+    // Simulación: parte del plan actual y aplica pedidos sencillos (en la versión real lo hace Claude).
+    const goal = (GOALS[p.profile?.goal] || 'entrenar').toLowerCase();
     const userTurns = (p.messages || []).filter((m) => m.role === 'user').length;
-    if (!userTurns) return { message: `¡Hola ${name}! Veo que quieres ${p.profile?.goal === 'fuerza' ? 'ganar fuerza' : 'ganar músculo'} entrenando ${p.profile?.days} días de ${p.profile?.minutes} min. Antes de armarlo:\n\n1. ¿Qué ejercicios te encantan y cuáles prefieres evitar?\n2. ¿Hay algún músculo que quieras priorizar?\n3. ¿Algún día tienes menos tiempo?`, plan: null };
-    const base = generatePlan(p.profile || {});
-    const last = (p.messages || []).filter((m) => m.role === 'user').pop()?.text || '';
-    const plan = { name: 'Plan del coach', rationale: `Diseñado con lo que me contaste ("${last.slice(0, 60)}"). ${base.rationale}`, days: base.days.map(({ id: _i, ...d }) => d) };
-    return { message: userTurns === 1 ? 'Listo, aquí está mi propuesta. Prioricé lo que me dijiste y mantuve el volumen en el rango recomendado. ¿Quieres cambiar algo?' : 'Hecho, ajusté el plan con tu comentario. ¿Algo más?', plan };
+    const current = p.currentPlan?.days?.length ? JSON.parse(JSON.stringify(p.currentPlan)) : { name: 'Plan', days: generatePlan(p.profile || {}).days };
+    if (!userTurns) {
+      return { message: `¡Hola ${name}! Te armé **${current.name}**${current.name.toLowerCase().includes(goal) ? '' : ` para ${goal}`}: ${current.days.length} días por semana (${current.days.map((d) => d.name).join(', ')}).\n\n¿Qué te gustaría ajustar? Por ejemplo:\n- Más trabajo de algún músculo (brazos, glúteos, espalda…)\n- Cambiar un ejercicio que no te gusta o que te molesta\n- Sesiones más cortas`, plan: null };
+    }
+    const last = ((p.messages || []).filter((m) => m.role === 'user').pop()?.text || '').toLowerCase();
+    const days = current.days.map((d) => ({ ...d, exercises: d.exercises.map((e) => ({ ...e })) }));
+    const all = days.flatMap((d) => d.exercises);
+    let did = '';
+    const bump = (muscles) => all.filter((e) => muscles.includes(e.muscle)).forEach((e) => (e.sets = Math.min((e.sets || 3) + 1, 5)));
+    if (/brazo|b[ií]ceps|tr[ií]ceps/.test(last)) { bump(['biceps', 'triceps']); did = 'Subí una serie a cada ejercicio de bíceps y tríceps.'; }
+    else if (/gl[uú]te|pompa|cola/.test(last)) { bump(['gluteos']); did = 'Subí el trabajo de glúteos.'; }
+    else if (/espalda/.test(last)) { bump(['espalda']); did = 'Subí el trabajo de espalda.'; }
+    else if (/pierna/.test(last)) { bump(['cuadriceps', 'isquios']); did = 'Subí el trabajo de piernas.'; }
+    else if (/tiempo|corto|r[aá]pido|menos/.test(last)) { all.filter((e) => e.kind === 'i').forEach((e) => (e.sets = Math.max(2, (e.sets || 3) - 1))); did = 'Bajé una serie a los aislamientos para acortar las sesiones.'; }
+    else if (/no me gusta|cambia|quita|odio|molest/.test(last)) {
+      const d = days.find((x) => x.exercises.length > 3);
+      const ex = d?.exercises[2];
+      const lib = ex && EXERCISES.find((z) => z.muscle === ex.muscle && z.name !== ex.name && !all.some((y) => y.name === z.name));
+      if (ex && lib) { did = `Cambié ${ex.name} por ${lib.name}.`; Object.assign(ex, { name: lib.name, kind: lib.kind, sec: lib.sec }); }
+    }
+    const plan = { name: current.name, rationale: `${did || 'Mantuve el plan: dime con más detalle qué cambiar.'} (Versión de prueba: en la app real el coach con IA entiende cualquier pedido.)`, days };
+    return { message: did ? `Hecho. ${did} ¿Algo más?` : 'En la versión de prueba solo entiendo pedidos sencillos (más brazos, glúteos, espalda o piernas; sesiones más cortas; cambiar un ejercicio). ¿Cuál quieres?', plan: did ? plan : null };
   }
   if (action === 'chat') {
     const last = (p.messages || []).filter((m) => m.role === 'user').pop()?.text?.toLowerCase() || '';
@@ -141,7 +160,7 @@ function mockCoach(action, p) {
       const ex = day?.exercises?.[day.exercises.length - 1];
       return { message: 'Te propongo este ajuste. Revísalo y aplícalo si te convence:', changes: ex ? [{ action: 'sets', day: day.name, exercise: ex.name, replacement: '', muscle: ex.muscle, kind: ex.kind || 'i', sets: Math.min((ex.sets || 3) + 1, 6), reason: 'Sumar una serie aquí acerca tu volumen al centro del rango sin alargar mucho la sesión.' }] : [] };
     }
-    return { message: `Buena pregunta, ${name}. Según tu plan vas en la semana ${p.report?.week ?? 1}: mantén el RIR que te marca la app y prioriza dormir 7–9 h. Si quieres que cambie algo del plan, dímelo y te propongo el ajuste.`, changes: [] };
+    return { message: `Buena pregunta, ${name}. (Respuesta de prueba: en la app real el coach con IA responde a tu pregunta con tus datos.) Vas en la semana ${p.report?.week ?? 1} de tu plan para ${(GOALS[p.profile?.goal] || '').toLowerCase()}: mantén el RIR que te marca la app y prioriza dormir 7–9 h. Si quieres que cambie algo del plan, dímelo y te propongo el ajuste.`, changes: [] };
   }
   if (action === 'review') {
     const ex = p.report?.exercises || [];

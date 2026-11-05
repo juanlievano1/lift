@@ -2,7 +2,7 @@
 // Calcula la prescripción de cada semana (series, reps, RIR, kg), la progresión esperada
 // y la compara con lo que realmente vas levantando para recomendar ajustes.
 
-import { e1rm, exerciseByName } from './science.js';
+import { e1rm, exerciseByName, estimateStart1RM, perHand } from './science.js';
 
 export const WEEKS = 12;
 const DAY = 864e5;
@@ -20,7 +20,7 @@ const BLOCKS = {
     { name: 'Pico', desc: 'Máxima intensidad; menos repeticiones.', c: [2, 4], i: [8, 12] },
   ],
   grasa: [
-    { name: 'Base', desc: 'Mantener volumen y técnica en déficit.', c: [8, 12], i: [12, 15] },
+    { name: 'Base', desc: 'Técnica y volumen mientras arranca el déficit.', c: [8, 12], i: [12, 15] },
     { name: 'Mantener fuerza', desc: 'Entrenar pesado para conservar músculo.', c: [6, 10], i: [10, 15] },
     { name: 'Mantener fuerza II', desc: 'Igual de pesado, gestionando la fatiga del déficit.', c: [6, 10], i: [10, 15] },
   ],
@@ -122,14 +122,20 @@ export function plannedMetric(plan, sessions, ex, w) {
   return base.metric * (1 + rate) ** progressWeeks(plan, base.week, w) * adj;
 }
 
+// Redondea al incremento real del equipo y respeta el mínimo físico (la barra sola ya pesa 20 kg).
+const fmtKg = (n) => String(n).replace('.', ',');
+
 function roundLoad(kg, ex) {
   const lib = exerciseByName(ex.name);
-  const step = lib?.equip === 'barra' || lib?.equip === 'maquina' ? 2.5 : lib?.equip === 'mancuernas' ? 2 : 1;
-  return Math.max(step, Math.round(kg / step) * step);
+  const eq = lib?.equip;
+  const step = eq === 'barra' || eq === 'maquina' || eq === 'polea' ? 2.5 : eq === 'mancuernas' ? 2 : 1;
+  const min = eq === 'barra' ? (['curl_barra', 'frances'].includes(lib.id) ? 10 : 20) : eq === 'maquina' ? 5 : eq === 'polea' ? 2.5 : eq === 'mancuernas' ? 2 : step;
+  return Math.max(min, Math.round(kg / step) * step);
 }
 
 // Prescripción de un ejercicio para una semana concreta.
-export function prescribe(plan, sessions, ex, w) {
+// profile (opcional): permite sugerir el peso inicial antes de la primera sesión.
+export function prescribe(plan, sessions, ex, w, profile = null) {
   const info = weekInfo(plan, w);
   const kind = ex.kind || exerciseByName(ex.name)?.kind || 'c';
   const lvl = plan.program.level;
@@ -147,7 +153,15 @@ export function prescribe(plan, sessions, ex, w) {
   const pm = plannedMetric(plan, sessions, ex, info.week);
   let kg = null, text;
   if (pm == null) {
-    text = `Calibración: elige un peso con el que hagas ${targetReps} reps dejando ${rir} en reserva. Con eso calculo tu progresión.`;
+    const est = !bw && estimateStart1RM(profile, ex.name);
+    if (est) {
+      kg = roundLoad(est / (1 + (targetReps + rir) / 30), ex);
+      text = `Peso sugerido para empezar: ${fmtKg(kg)} kg${perHand(ex.name) ? ' por mancuerna' : ''} × ${targetReps} reps (estimado con tu peso y nivel). Si te sobran más de ${rir} reps o no llegas, ajústalo: esta sesión calibra tu plan.`;
+    } else if (bw) {
+      text = `Primera vez: haz ${targetReps} reps por serie dejando ${rir} en reserva. Si no llegas, haz la versión más fácil; si te sobran muchas, ponle más dificultad.`;
+    } else {
+      text = `Primera vez: elige un peso con el que hagas ${targetReps} reps dejando ${rir} en reserva. Con eso calculo tu progresión.`;
+    }
   } else if (bw) {
     const reps = Math.round(pm - rir);
     text = reps > repMax
@@ -155,7 +169,7 @@ export function prescribe(plan, sessions, ex, w) {
       : `Objetivo: ${Math.max(reps, 1)} reps por serie dejando ${rir} en reserva.`;
   } else {
     kg = roundLoad(pm / (1 + (targetReps + rir) / 30), ex);
-    text = `Objetivo: ${kg} kg × ${targetReps} reps, RIR ${rir}${info.deload ? ' (descarga: más ligero, recupera)' : ''}.`;
+    text = `Objetivo: ${fmtKg(kg)} kg${perHand(ex.name) ? ' por mancuerna' : ''} × ${targetReps} reps, RIR ${rir}${info.deload ? ' (descarga: más ligero, recupera)' : ''}.`;
   }
   return { sets, repMin, repMax, rir, restSec, targetReps, kg, text, deload: info.deload };
 }

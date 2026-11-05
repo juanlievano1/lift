@@ -1,5 +1,5 @@
 import { db, update, uid, today, activePlan, exportJSON, importJSON, resetAll, requestPersistence } from './db.js';
-import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, generatePlan, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName } from './science.js';
+import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, PRIORITIES, TIME_RANGES, timeRangeOf, timeLabel, estimateMinutes, generatePlan, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName } from './science.js';
 import { lineChart, volumeBars } from './charts.js';
 import { WEEKS, ensureProgram, weekInfo, prescribe, exerciseTrack, exerciseStatus, uniqueExercises, applyRec, dismissRec, blocksFor, planReport, applyReviewChanges } from './program.js';
 import { $, esc, fmtDate, n1, clone, toast, openModal, closeModal, modalOpen, actions, routes, setRenderer, go, avatar } from './ui.js';
@@ -33,11 +33,27 @@ function render() {
   if (s.plans.some((p) => !p.program)) update((st) => st.plans.forEach((p) => ensureProgram(p, st.profile)));
   if (route === 'crear' && !s.plans.length) document.body.classList.add('onboarding');
   (routes[route] || viewHoy)();
+  addProfileButton(route);
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('on', a.getAttribute('href') === '#' + route));
   renderRestBar();
   if (!modalOpen()) window.scrollTo(0, 0);
 }
 setRenderer(render);
+
+// Acceso a Perfil (y a cerrar sesión) desde la esquina de cada pantalla.
+function addProfileButton(route) {
+  const top = main.querySelector('header.top');
+  if (!top || top.querySelector('.me') || ['perfil', 'entreno', 'editar'].includes(route)) return;
+  const btn = `<a href="#perfil" class="me" aria-label="Tu perfil y cerrar sesión">${avatar(cloud.me?.display_name || db().profile?.name)}</a>`;
+  if (top.children.length >= 2) {
+    const right = top.lastElementChild;
+    const wrap = document.createElement('div');
+    wrap.className = 'topright';
+    top.replaceChild(wrap, right);
+    wrap.append(right);
+    wrap.insertAdjacentHTML('beforeend', btn);
+  } else top.insertAdjacentHTML('beforeend', btn);
+}
 window.addEventListener('hashchange', render);
 
 // ---------- Onboarding ----------
@@ -57,15 +73,20 @@ function profileForm(p = {}) {
   <label>Experiencia entrenando<select name="level">${opt(LEVELS, p.level || 'intermedio')}</select></label>
   <div class="row2">
     <label>Días por semana<select name="days">${[2, 3, 4, 5, 6].map((d) => `<option ${Number(p.days || 4) === d ? 'selected' : ''}>${d}</option>`).join('')}</select></label>
-    <label>Minutos por sesión<select name="minutes">${[45, 60, 75, 90].map((d) => `<option ${Number(p.minutes || 60) === d ? 'selected' : ''}>${d}</option>`).join('')}</select></label>
+    <label>Tiempo por sesión<select name="time">${Object.keys(TIME_RANGES).map((r) => `<option value="${r}" ${timeRangeOf({ time: p.time, minutes: p.minutes || 75 }) === r ? 'selected' : ''}>${timeLabel(r)}</option>`).join('')}</select></label>
   </div>
-  <label>Equipo disponible<select name="equipment">${opt(EQUIPMENT, p.equipment || 'gym')}</select></label>
+  <fieldset class="prios"><legend>¿Qué quieres priorizar? <span class="muted">(opcional, máximo 2)</span></legend>
+    ${Object.entries(PRIORITIES).map(([k, v]) => `<label class="pchip"><input type="checkbox" name="prio" value="${k}" ${(p.priorities || []).includes(k) ? 'checked' : ''}><span>${v.label}</span></label>`).join('')}
+  </fieldset>
   <label>Lesiones o limitaciones <span class="muted">(opcional)</span><input name="injuries" value="${esc(p.injuries)}" placeholder="Ej.: molestia en hombro derecho"></label>`;
 }
 
 function readProfile(form) {
-  const f = Object.fromEntries(new FormData(form));
-  return { ...f, weight: Number(f.weight), height: Number(f.height) || '', age: Number(f.age) || '', days: Number(f.days), minutes: Number(f.minutes) };
+  const fd = new FormData(form);
+  const f = Object.fromEntries(fd);
+  delete f.prio;
+  const time = TIME_RANGES[f.time] ? f.time : '60-75';
+  return { ...f, equipment: 'gym', time, priorities: fd.getAll('prio').slice(0, 2), weight: Number(f.weight), height: Number(f.height) || '', age: Number(f.age) || '', days: Number(f.days), minutes: TIME_RANGES[time][1] };
 }
 
 function viewOnboarding() {
@@ -74,11 +95,17 @@ function viewOnboarding() {
   <section class="hero">
     <div class="logo">${APP_NAME}</div>
     <h1>${name ? `Hola, ${esc(name)}` : 'Tu entrenador de bolsillo'}</h1>
-    <p class="muted">Cuéntame lo básico para armar tu plan de 12 semanas. ${cloud.enabled ? 'Luego podrás afinarlo con el coach.' : 'Tus datos se quedan en este celular.'}</p>
+    <p class="muted">Cuéntame lo básico y te armo al instante tu plan de 12 semanas con base científica. ${cloud.enabled ? 'Después lo puedes ajustar con el coach.' : 'Tus datos se quedan en este celular.'}</p>
   </section>
   <form id="onb" class="card form">${profileForm({ name })}
-    <button class="btn primary big" type="submit">Continuar</button>
+    <button class="btn primary big" type="submit">Crear mi plan</button>
   </form>`;
+  $('#onb').addEventListener('change', (e) => {
+    // Máximo 2 prioridades: más que eso deja de ser prioridad.
+    if (e.target.name !== 'prio') return;
+    const on = [...e.target.form.querySelectorAll('input[name=prio]:checked')];
+    if (on.length > 2) { e.target.checked = false; toast('Elige máximo 2 prioridades'); }
+  });
   $('#onb').addEventListener('submit', (e) => {
     e.preventDefault();
     const p = readProfile(e.target);
@@ -87,8 +114,8 @@ function viewOnboarding() {
       s.weights.push({ id: uid(), date: today(), kg: p.weight });
     });
     requestPersistence();
-    if (cloud.enabled) return viewPlanChoice();
     generateSciencePlan();
+    update((st) => (st.coach.newPlanTip = true));
     go('hoy');
   });
 }
@@ -99,18 +126,6 @@ function generateSciencePlan() {
   cloud.publish('plan', { planName: plan.name, days: plan.days.length, source: plan.source });
   toast('Plan de 12 semanas creado');
   return plan;
-}
-
-function viewPlanChoice() {
-  document.body.classList.add('onboarding');
-  main.innerHTML = `
-  <section class="hero"><div class="logo">${APP_NAME}</div><h1>¿Cómo armamos tu plan?</h1></section>
-  <button class="card choice" data-act="choiceCoach">
-    <span class="gi">💬</span><span><b>Crearlo con el coach</b><span class="pill sm">Recomendado</span><br><span class="muted small">Te hace unas preguntas, le dices qué te gusta y qué no, y lo ajustan juntos.</span></span>
-  </button>
-  <button class="card choice" data-act="choiceScience">
-    <span class="gi">⚡</span><span><b>Generarlo al instante</b><br><span class="muted small">Plan basado en evidencia con tu perfil. Lo puedes ajustar con el coach después.</span></span>
-  </button>`;
 }
 
 // ---------- Hoy ----------
@@ -132,6 +147,13 @@ function viewHoy() {
   <header class="top"><div><p class="muted">${hi}${s.profile.name ? ', ' + esc(s.profile.name) : ''} · ${new Date().toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long' })}</p><h1>Hoy</h1></div><a href="#perfil" class="me" aria-label="Tu perfil">${avatar(cloud.me?.display_name || s.profile.name)}</a></header>
 
   ${coachBanner()}
+  ${s.coach.newPlanTip && plan ? `
+  <section class="card newplan">
+    <p class="eyebrow">Tu plan está listo</p>
+    <h3>${esc(plan.name)}</h3>
+    <p class="small">${plan.days.length} días por semana durante 12 semanas, con el peso sugerido para cada ejercicio. ${cloud.enabled ? '¿Quieres cambiar algo? Dile al coach qué te gusta, qué no o qué quieres priorizar.' : ''}</p>
+    <div class="actions wrap">${cloud.enabled ? '<a class="btn primary sm" href="#crear" data-act="tipDone">Ajustar con el coach</a>' : ''}<a class="btn ghost sm" href="#rutinas" data-act="tipDone">Ver el plan</a><button class="btn ghost sm" data-act="tipDone">Así está bien</button></div>
+  </section>` : ''}
 
   ${s.activeSession ? `
   <section class="card accent">
@@ -143,8 +165,8 @@ function viewHoy() {
   <section class="card accent">
     <p class="eyebrow">Semana ${info.week} de ${WEEKS} · Bloque ${info.block}: ${esc(info.blockName)}</p>
     <h2>${esc(day.name)}</h2>
-    <p class="muted">${info.deload ? '🔋 ' : ''}${esc(info.label)} · ${esc(day.focus || '')}</p>
-    <ul class="mini">${day.exercises.map((e) => { const rx = prescribe(plan, s.sessions, e, wk); return `<li><span>${esc(e.name)}</span><span class="muted">${rxLabel(rx)}</span></li>`; }).join('')}</ul>
+    <p class="muted">${info.deload ? '🔋 ' : ''}${esc(info.label)} · ⏱ ≈ ${estimateMinutes(day)} min · ${esc(day.focus || '')}</p>
+    <ul class="mini">${day.exercises.map((e) => { const rx = prescribe(plan, s.sessions, e, wk, s.profile); return `<li><span>${esc(e.name)}</span><span class="muted">${rxLabel(rx)}</span></li>`; }).join('')}</ul>
     <div class="actions"><button class="btn primary big" data-act="start" data-day="${day.id}">Empezar entreno</button></div>
     ${plan.days.length > 1 ? `<button class="link" data-act="skipDay">Hacer otro día</button>` : ''}
   </section>` : `
@@ -208,7 +230,7 @@ function startSession(dayId) {
 // Ejercicio listo para registrar: usa la prescripción de la semana del plan, o progresión doble si es entreno libre.
 function sessionExercise(e, plan, wk, sessions) {
   if (plan && wk) {
-    const rx = prescribe(plan, sessions, e, wk);
+    const rx = prescribe(plan, sessions, e, wk, db().profile);
     return {
       name: e.name, muscle: e.muscle, sec: e.sec, kind: e.kind, notes: e.notes,
       target: { sets: rx.sets, repMin: rx.repMin, repMax: rx.repMax, rir: rx.rir, restSec: rx.restSec, kg: rx.kg, reps: rx.targetReps },
@@ -240,7 +262,7 @@ function viewEntreno() {
     ${plan ? `<p class="muted">Elige el día de <b>${esc(plan.name)}</b>:</p>
     <div class="list">${plan.days.map((d, i) => `
       <button class="card daypick" data-act="start" data-day="${d.id}">
-        <span><b>${esc(d.name)}</b>${i === (plan.nextDay || 0) % plan.days.length ? ' <span class="pill sm">Toca hoy</span>' : ''}<br><span class="muted small">${d.exercises.length} ejercicios · ${esc(d.focus || '')}</span></span><span class="chev">›</span>
+        <span><b>${esc(d.name)}</b>${i === (plan.nextDay || 0) % plan.days.length ? ' <span class="pill sm">Toca hoy</span>' : ''}<br><span class="muted small">${d.exercises.length} ejercicios · ≈ ${estimateMinutes(d)} min · ${esc(d.focus || '')}</span></span><span class="chev">›</span>
       </button>`).join('')}</div>` : ''}
     <button class="btn ghost big" data-act="start" data-day="">Entreno libre</button>`;
     return;
@@ -266,7 +288,7 @@ function exerciseCard(e, i, s) {
   <section class="card ex ${e.sets.every((x) => x.done) ? 'complete' : ''}">
     <div class="exhead">
       <div><h3>${esc(e.name)}</h3>
-      <p class="muted small">${MUSCLES[e.muscle] || ''} · ${e.target.sets}×${e.target.repMin}–${e.target.repMax} · RIR ${e.target.rir} · ${Math.round(e.target.restSec / 60 * 10) / 10} min</p></div>
+      <p class="muted small">${MUSCLES[e.muscle] || ''} · ${e.target.sets}×${e.target.repMin}–${e.target.repMax} · RIR ${e.target.rir} · descanso ${restLabel(e.target.restSec)}</p></div>
       <button class="icon" data-act="removeEx" data-ex="${i}" aria-label="Quitar ejercicio">✕</button>
     </div>
     ${e.hint ? `<p class="hint">↗ ${esc(e.hint)}</p>` : ''}
@@ -286,6 +308,8 @@ function exerciseCard(e, i, s) {
     <div class="exfoot"><button class="link" data-act="addSet" data-ex="${i}">+ Serie</button>${e.sets.length > 1 ? `<button class="link" data-act="delSet" data-ex="${i}">− Serie</button>` : ''}</div>
   </section>`;
 }
+
+const restLabel = (sec) => (sec < 120 ? `${sec} s` : `${String(Math.round((sec / 60) * 10) / 10).replace('.', ',')} min`);
 
 function tickElapsed() {
   const el = $('#elapsed');
@@ -374,8 +398,8 @@ function planCard(plan, s, active) {
     ${planTimeline(plan, active)}
     ${active ? recsBlock(plan) : ''}
     ${plan.days.map((d) => `
-    <details class="day"><summary><b>${esc(d.name)}</b> <span class="muted small">${d.exercises.length} ejercicios · ${esc(d.focus || '')}</span></summary>
-      <ul class="mini">${d.exercises.map((e) => { const rx = prescribe(plan, s.sessions, e, active ? currentWeek(plan) : 1); return `<li><span>${esc(e.name)}${e.notes ? `<br><span class="muted small">${esc(e.notes)}</span>` : ''}</span><span class="muted">${rxLabel(rx)} · RIR ${rx.rir}</span></li>`; }).join('')}</ul>
+    <details class="day"><summary><b>${esc(d.name)}</b> <span class="muted small">${d.exercises.length} ejercicios · ≈ ${estimateMinutes(d)} min</span></summary>
+      <ul class="mini">${d.exercises.map((e) => { const rx = prescribe(plan, s.sessions, e, active ? currentWeek(plan) : 1, s.profile); return `<li><span>${esc(e.name)}${e.notes ? `<br><span class="muted small">${esc(e.notes)}</span>` : ''}</span><span class="muted">${rxLabel(rx)} · RIR ${rx.rir}</span></li>`; }).join('')}</ul>
       <p class="muted small">${active ? `Prescripción de la semana ${weekInfo(plan, currentWeek(plan)).week}.` : 'Prescripción de la semana 1.'} Cambia cada semana según la fase.</p>
     </details>`).join('')}
     <details class="day"><summary><b>Volumen semanal por músculo</b> <span class="muted small">series, objetivo sombreado</span></summary>${volumeBars(rows)}</details>
@@ -437,8 +461,8 @@ function viewRutinas() {
   <header class="top"><h1>Planes</h1></header>
   <p class="eyebrow">Crear un plan nuevo</p>
   <section class="gen">
-    <button class="gencard" data-act="genScience"><span class="gi">⚡</span><b>Al instante</b><span class="muted small">Con ciencia, sin internet</span></button>
-    <a class="gencard" href="#crear"><span class="gi">💬</span><b>Con el coach</b><span class="muted small">Conversando</span></a>
+    <button class="gencard" data-act="genScience"><span class="gi">⚡</span><b>Plan nuevo</b><span class="muted small">Al instante, con ciencia</span></button>
+    <a class="gencard" href="#crear"><span class="gi">💬</span><b>Ajustar con el coach</b><span class="muted small">Pide cambios</span></a>
     <button class="gencard" data-act="newPlan"><span class="gi">✍️</span><b>Desde cero</b><span class="muted small">Tú lo armas</span></button>
   </section>
   ${plan ? planCard(plan, s, true) : ''}
@@ -682,12 +706,31 @@ function viewPerfil() {
       <button class="btn ghost sm danger" data-act="reset">Borrar mis datos</button>
     </div>
   </section>
-  <p class="muted small center">${APP_NAME} v0.5${cloud.mockMode ? ' · modo prueba' : ''}</p>`;
+  ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
+  ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
+  <p class="muted small center">${APP_NAME} v0.6${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
+  $('#pform').addEventListener('change', (e) => {
+    if (e.target.name !== 'prio') return;
+    if (e.target.form.querySelectorAll('input[name=prio]:checked').length > 2) { e.target.checked = false; toast('Elige máximo 2 prioridades'); }
+  });
   $('#pform').addEventListener('submit', (e) => {
     e.preventDefault();
     const p = readProfile(e.target);
+    const before = db().profile;
+    const keys = ['goal', 'level', 'days', 'time', 'sex'];
+    const changed = keys.some((k) => String(before[k]) !== String(p[k])) || (before.priorities || []).join() !== p.priorities.join();
     update((st) => { st.profile = { ...st.profile, ...p }; });
+    if (changed && confirm('Cambiaste datos que afectan tu plan. ¿Crear un plan nuevo con estos cambios? (Tu historial se conserva.)')) {
+      const prev = activePlan();
+      const plan = withProgram(generatePlan(db().profile));
+      update((st) => {
+        if (prev && !st.sessions.some((x) => x.planId === prev.id)) st.plans = st.plans.filter((x) => x.id !== prev.id);
+        st.plans.push(plan); st.activePlanId = plan.id; st.coach.newPlanTip = true;
+      });
+      toast('Plan nuevo creado con tus cambios');
+      return go('hoy');
+    }
     toast('Perfil guardado');
   });
   $('#nform')?.addEventListener('submit', async (e) => {
@@ -751,7 +794,7 @@ Object.assign(actions, {
   restAdd: () => { if (restTimer) { restTimer.end += 30000; restTimer.total += 30; renderRestBar(); } },
   restStop: () => stopRest(),
 
-  choiceCoach: () => go('crear'),
+  tipDone: (el) => { update((st) => (st.coach.newPlanTip = false)); if (el.tagName !== 'A') render(); },
   choiceScience: () => { generateSciencePlan(); go('hoy'); },
   genScience: () => {
     const plan = withProgram(generatePlan(db().profile));
@@ -832,6 +875,12 @@ Object.assign(actions, {
   reset: () => {
     if (!(confirm(`Esto borra TODOS tus datos de entrenamiento${cloud.user ? ' de este celular y de tu cuenta' : ' de este celular'}. ¿Seguro?`) && confirm('Última confirmación: ¿borrar todo?'))) return;
     resetAll(!!cloud.user); draft = null; location.hash = ''; render();
+  },
+  demoReset: async () => {
+    if (!confirm('¿Borrar la cuenta de prueba y empezar desde cero?')) return;
+    Object.keys(localStorage).filter((k) => k.startsWith('forja.')).forEach((k) => localStorage.removeItem(k));
+    sessionStorage.clear();
+    location.href = location.pathname;
   },
   logout: async () => {
     if (db().activeSession && !confirm('Tienes un entreno en curso. ¿Cerrar sesión igual?')) return;
