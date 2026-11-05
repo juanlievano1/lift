@@ -1,5 +1,5 @@
 // Nombre de la app: cámbialo aquí (y en index.html, manifest.webmanifest y supabase/functions/coach/core.js).
-export const APP_NAME = 'Racha';
+export const APP_NAME = 'Lift';
 export const APP_TAGLINE = 'Entrena con plan. Progresa con tu parche.';
 
 // Conexión con Supabase. Ambos valores son públicos (la seguridad la dan las reglas de la base de datos).

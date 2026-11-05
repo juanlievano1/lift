@@ -1,6 +1,6 @@
 // Service worker: deja la app disponible sin internet.
 // Sube VERSION cada vez que cambies archivos para que el celular descargue la versión nueva.
-const VERSION = 'racha-v5';
+const VERSION = 'lift-v6';
 const SHELL = [
   './', './index.html', './styles.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/util.js', './js/science.js', './js/program.js', './js/charts.js',

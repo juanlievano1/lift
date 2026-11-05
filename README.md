@@ -1,4 +1,4 @@
-# Racha (versión de prueba)
+# Lift (versión de prueba)
 
 Web app para entrenar con plan de 12 semanas, coach con IA y amigos.
 Esta es la **versión de prueba**: cuentas, amigos y coach son simulados y los datos se guardan solo en cada celular.
