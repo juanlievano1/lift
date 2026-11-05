@@ -1,0 +1,902 @@
+import { db, update, uid, today, activePlan, exportJSON, importJSON, resetAll, requestPersistence } from './db.js';
+import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, generatePlan, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName } from './science.js';
+import { lineChart, volumeBars } from './charts.js';
+import { WEEKS, ensureProgram, weekInfo, prescribe, exerciseTrack, exerciseStatus, uniqueExercises, applyRec, dismissRec, blocksFor, planReport, applyReviewChanges } from './program.js';
+import { $, esc, fmtDate, n1, clone, toast, openModal, closeModal, modalOpen, actions, routes, setRenderer, go, avatar } from './ui.js';
+import { MODE_LABEL, SOURCE, withProgram, rxLabel, currentWeek, weekStart, weightStats, weightText, planRecs } from './domain.js';
+import * as cloud from './cloud.js';
+import { APP_NAME } from './config.js';
+import { viewAuth, consumeInvite } from './auth.js';
+import { viewAmigos, publishSession } from './social.js';
+import { viewCoach, viewCrear, runPostSession, maybeWeeklyReview, coachBanner } from './coachui.js';
+
+const main = $('#main');
+
+let draft = null;          // rutina en edición
+let pickerCb = null;       // callback del selector de ejercicios
+let restTimer = null;      // temporizador de descanso
+let progressExercise = ''; // ejercicio seleccionado en Progreso
+let planExercise = '';     // ejercicio seleccionado en Plan vs real
+let booted = false;
+
+// ---------- Navegación ----------
+Object.assign(routes, { hoy: viewHoy, entreno: viewEntreno, rutinas: viewRutinas, progreso: viewProgreso, perfil: viewPerfil, editar: viewEditar, amigos: viewAmigos, coach: viewCoach, crear: viewCrear });
+
+function render() {
+  if (!booted) return;
+  const s = db();
+  const route = (location.hash.slice(1) || 'hoy').split('/')[0];
+  const needsAuth = cloud.enabled && (!cloud.user || cloud.needsUsername());
+  document.body.classList.toggle('onboarding', needsAuth || !s.profile);
+  if (needsAuth) return viewAuth();
+  if (!s.profile) return viewOnboarding();
+  if (s.plans.some((p) => !p.program)) update((st) => st.plans.forEach((p) => ensureProgram(p, st.profile)));
+  if (route === 'crear' && !s.plans.length) document.body.classList.add('onboarding');
+  (routes[route] || viewHoy)();
+  document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('on', a.getAttribute('href') === '#' + route));
+  renderRestBar();
+  if (!modalOpen()) window.scrollTo(0, 0);
+}
+setRenderer(render);
+window.addEventListener('hashchange', render);
+
+// ---------- Onboarding ----------
+function profileForm(p = {}) {
+  const opt = (obj, v) => Object.entries(obj).map(([k, l]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${l}</option>`).join('');
+  return `
+  <label>Nombre<input name="name" value="${esc(p.name)}" placeholder="Tu nombre" autocomplete="given-name"></label>
+  <div class="row2">
+    <label>Peso (kg)<input name="weight" type="number" step="0.1" inputmode="decimal" value="${esc(p.weight)}" required></label>
+    <label>Altura (cm)<input name="height" type="number" inputmode="numeric" value="${esc(p.height)}"></label>
+  </div>
+  <div class="row2">
+    <label>Edad<input name="age" type="number" inputmode="numeric" value="${esc(p.age)}"></label>
+    <label>Sexo<select name="sex">${opt({ hombre: 'Hombre', mujer: 'Mujer', otro: 'Prefiero no decir' }, p.sex)}</select></label>
+  </div>
+  <label>Objetivo principal<select name="goal">${opt(GOALS, p.goal || 'hipertrofia')}</select></label>
+  <label>Experiencia entrenando<select name="level">${opt(LEVELS, p.level || 'intermedio')}</select></label>
+  <div class="row2">
+    <label>Días por semana<select name="days">${[2, 3, 4, 5, 6].map((d) => `<option ${Number(p.days || 4) === d ? 'selected' : ''}>${d}</option>`).join('')}</select></label>
+    <label>Minutos por sesión<select name="minutes">${[45, 60, 75, 90].map((d) => `<option ${Number(p.minutes || 60) === d ? 'selected' : ''}>${d}</option>`).join('')}</select></label>
+  </div>
+  <label>Equipo disponible<select name="equipment">${opt(EQUIPMENT, p.equipment || 'gym')}</select></label>
+  <label>Lesiones o limitaciones <span class="muted">(opcional)</span><input name="injuries" value="${esc(p.injuries)}" placeholder="Ej.: molestia en hombro derecho"></label>`;
+}
+
+function readProfile(form) {
+  const f = Object.fromEntries(new FormData(form));
+  return { ...f, weight: Number(f.weight), height: Number(f.height) || '', age: Number(f.age) || '', days: Number(f.days), minutes: Number(f.minutes) };
+}
+
+function viewOnboarding() {
+  const name = cloud.me?.display_name?.split(' ')[0] || '';
+  main.innerHTML = `
+  <section class="hero">
+    <div class="logo">${APP_NAME}</div>
+    <h1>${name ? `Hola, ${esc(name)}` : 'Tu entrenador de bolsillo'}</h1>
+    <p class="muted">Cuéntame lo básico para armar tu plan de 12 semanas. ${cloud.enabled ? 'Luego podrás afinarlo con el coach.' : 'Tus datos se quedan en este celular.'}</p>
+  </section>
+  <form id="onb" class="card form">${profileForm({ name })}
+    <button class="btn primary big" type="submit">Continuar</button>
+  </form>`;
+  $('#onb').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const p = readProfile(e.target);
+    update((s) => {
+      s.profile = p;
+      s.weights.push({ id: uid(), date: today(), kg: p.weight });
+    });
+    requestPersistence();
+    if (cloud.enabled) return viewPlanChoice();
+    generateSciencePlan();
+    go('hoy');
+  });
+}
+
+function generateSciencePlan() {
+  const plan = withProgram(generatePlan(db().profile));
+  update((s) => { s.plans.push(plan); s.activePlanId = plan.id; });
+  cloud.publish('plan', { planName: plan.name, days: plan.days.length, source: plan.source });
+  toast('Plan de 12 semanas creado');
+  return plan;
+}
+
+function viewPlanChoice() {
+  document.body.classList.add('onboarding');
+  main.innerHTML = `
+  <section class="hero"><div class="logo">${APP_NAME}</div><h1>¿Cómo armamos tu plan?</h1></section>
+  <button class="card choice" data-act="choiceCoach">
+    <span class="gi">💬</span><span><b>Crearlo con el coach</b><span class="pill sm">Recomendado</span><br><span class="muted small">Te hace unas preguntas, le dices qué te gusta y qué no, y lo ajustan juntos.</span></span>
+  </button>
+  <button class="card choice" data-act="choiceScience">
+    <span class="gi">⚡</span><span><b>Generarlo al instante</b><br><span class="muted small">Plan basado en evidencia con tu perfil. Lo puedes ajustar con el coach después.</span></span>
+  </button>`;
+}
+
+// ---------- Hoy ----------
+function viewHoy() {
+  const s = db();
+  const plan = activePlan();
+  const ws = weightStats();
+  const weekCount = s.sessions.filter((x) => new Date(x.date + 'T12:00:00') >= weekStart()).length;
+  const day = plan?.days[(plan.nextDay || 0) % plan.days.length];
+  const wk = plan ? currentWeek(plan) : 1;
+  const info = plan ? weekInfo(plan, wk) : null;
+  const recs = planRecs(plan).filter((r) => r.level !== 'info' || r.key === 'fin');
+  const hour = new Date().getHours();
+  const hi = hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
+  const [rlo, rhi] = weightRateTarget(s.profile.goal);
+  const rateOk = ws?.rate != null && ws.rate >= rlo - 0.05 && ws.rate <= rhi + 0.05;
+
+  main.innerHTML = `
+  <header class="top"><div><p class="muted">${hi}${s.profile.name ? ', ' + esc(s.profile.name) : ''} · ${new Date().toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long' })}</p><h1>Hoy</h1></div><a href="#perfil" class="me" aria-label="Tu perfil">${avatar(cloud.me?.display_name || s.profile.name)}</a></header>
+
+  ${coachBanner()}
+
+  ${s.activeSession ? `
+  <section class="card accent">
+    <p class="eyebrow">Entreno en curso</p>
+    <h2>${esc(s.activeSession.dayName)}</h2>
+    <p class="muted">${s.activeSession.exercises.reduce((a, e) => a + e.sets.filter((x) => x.done).length, 0)} series hechas</p>
+    <a class="btn primary big" href="#entreno">Continuar</a>
+  </section>` : day ? `
+  <section class="card accent">
+    <p class="eyebrow">Semana ${info.week} de ${WEEKS} · Bloque ${info.block}: ${esc(info.blockName)}</p>
+    <h2>${esc(day.name)}</h2>
+    <p class="muted">${info.deload ? '🔋 ' : ''}${esc(info.label)} · ${esc(day.focus || '')}</p>
+    <ul class="mini">${day.exercises.map((e) => { const rx = prescribe(plan, s.sessions, e, wk); return `<li><span>${esc(e.name)}</span><span class="muted">${rxLabel(rx)}</span></li>`; }).join('')}</ul>
+    <div class="actions"><button class="btn primary big" data-act="start" data-day="${day.id}">Empezar entreno</button></div>
+    ${plan.days.length > 1 ? `<button class="link" data-act="skipDay">Hacer otro día</button>` : ''}
+  </section>` : `
+  <section class="card"><h2>Sin rutina activa</h2><p class="muted">Genera o crea una rutina para empezar.</p><a class="btn primary" href="#rutinas">Ir a rutinas</a></section>`}
+
+  ${recs.length ? `<a class="card recbanner ${recs[0].level}" href="#rutinas"><b>${esc(recs[0].title)}</b><span class="muted small">${recs.length > 1 ? `y ${recs.length - 1} ajuste${recs.length > 2 ? 's' : ''} más · ` : ''}Ver en tu plan ›</span></a>` : ''}
+
+  <section class="stats">
+    <div class="stat"><span class="eyebrow">Esta semana</span><b>${weekCount}<small> / ${s.profile.days}</small></b><span class="muted">entrenos</span></div>
+    <div class="stat"><span class="eyebrow">Peso (media 7 d)</span><b>${ws ? n1(ws.nowAvg) : '—'}<small> kg</small></b>
+      <span class="${ws?.rate == null ? 'muted' : rateOk ? 'good' : 'warn'}">${ws?.rate == null ? 'Registra más días' : (ws.rate > 0 ? '+' : '') + n1(ws.rate) + ' %/sem'}</span></div>
+  </section>
+
+  <section class="card">
+    <h3>Registrar peso de hoy</h3>
+    <form id="wform" class="inline">
+      <input name="kg" type="number" step="0.1" inputmode="decimal" placeholder="${ws ? n1(ws.last.kg) : 'kg'}" required aria-label="Peso en kg">
+      <button class="btn primary" type="submit">Guardar</button>
+    </form>
+    <p class="muted small">Pésate en ayunas, después del baño. La media de 7 días elimina el ruido diario.</p>
+  </section>`;
+
+  $('#wform').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const kg = Number(new FormData(e.target).get('kg'));
+    if (!kg) return;
+    update((s2) => {
+      const d = today();
+      const ex = s2.weights.find((w) => w.date === d);
+      if (ex) ex.kg = kg; else s2.weights.push({ id: uid(), date: d, kg });
+      s2.profile.weight = kg;
+    });
+    toast('Peso guardado');
+    render();
+  });
+  maybeWeeklyReview();
+}
+
+// ---------- Entreno ----------
+function startSession(dayId) {
+  const plan = activePlan();
+  const s = db();
+  const day = plan?.days.find((d) => d.id === dayId);
+  const exs = day ? day.exercises : [];
+  const wk = plan ? currentWeek(plan) : null;
+  update((st) => {
+    st.activeSession = {
+      id: uid(),
+      planId: plan?.id || null,
+      dayId: day?.id || null,
+      dayName: day?.name || 'Entreno libre',
+      week: day ? weekInfo(plan, wk).week : null,
+      startedAt: Date.now(),
+      date: today(),
+      exercises: exs.map((e) => sessionExercise(e, plan, wk, s.sessions)),
+    };
+  });
+  go('entreno');
+}
+
+// Ejercicio listo para registrar: usa la prescripción de la semana del plan, o progresión doble si es entreno libre.
+function sessionExercise(e, plan, wk, sessions) {
+  if (plan && wk) {
+    const rx = prescribe(plan, sessions, e, wk);
+    return {
+      name: e.name, muscle: e.muscle, sec: e.sec, kind: e.kind, notes: e.notes,
+      target: { sets: rx.sets, repMin: rx.repMin, repMax: rx.repMax, rir: rx.rir, restSec: rx.restSec, kg: rx.kg, reps: rx.targetReps },
+      hint: rx.text,
+      sets: Array.from({ length: rx.sets }, () => ({ kg: rx.kg ?? lastKg(sessions, e.name), reps: '', rir: '', done: false })),
+    };
+  }
+  const sug = suggestion(sessions, e, e.name);
+  return {
+    name: e.name, muscle: e.muscle, sec: e.sec, kind: e.kind, notes: e.notes,
+    target: { sets: e.sets, repMin: e.repMin, repMax: e.repMax, rir: e.rir, restSec: e.restSec },
+    hint: sug.text,
+    sets: Array.from({ length: e.sets }, () => ({ kg: sug.kg ?? '', reps: '', rir: '', done: false })),
+  };
+}
+
+function lastKg(sessions, name) {
+  const l = lastPerformance(sessions, name);
+  return l ? Math.max(...l.ex.sets.map((x) => Number(x.kg) || 0)) || '' : '';
+}
+
+function viewEntreno() {
+  const s = db();
+  const a = s.activeSession;
+  if (!a) {
+    const plan = activePlan();
+    main.innerHTML = `
+    <header class="top"><h1>Entrenar</h1></header>
+    ${plan ? `<p class="muted">Elige el día de <b>${esc(plan.name)}</b>:</p>
+    <div class="list">${plan.days.map((d, i) => `
+      <button class="card daypick" data-act="start" data-day="${d.id}">
+        <span><b>${esc(d.name)}</b>${i === (plan.nextDay || 0) % plan.days.length ? ' <span class="pill sm">Toca hoy</span>' : ''}<br><span class="muted small">${d.exercises.length} ejercicios · ${esc(d.focus || '')}</span></span><span class="chev">›</span>
+      </button>`).join('')}</div>` : ''}
+    <button class="btn ghost big" data-act="start" data-day="">Entreno libre</button>`;
+    return;
+  }
+  const done = a.exercises.reduce((x, e) => x + e.sets.filter((z) => z.done).length, 0);
+  const total = a.exercises.reduce((x, e) => x + e.sets.length, 0);
+  main.innerHTML = `
+  <header class="top"><div><p class="eyebrow">${a.week ? `Semana ${a.week} · ` : ''}En curso · <span id="elapsed"></span></p><h1>${esc(a.dayName)}</h1></div>
+    <button class="btn ghost sm" data-act="cancelSession">Descartar</button></header>
+  <div class="progress"><span style="width:${total ? (done / total) * 100 : 0}%"></span></div>
+  ${a.exercises.map((e, i) => exerciseCard(e, i, s)).join('')}
+  <button class="btn ghost big" data-act="pickForSession">+ Añadir ejercicio</button>
+  <label class="notes">Notas del entreno<textarea id="snotes" rows="2" placeholder="Cómo te sentiste, molestias, etc.">${esc(a.notes)}</textarea></label>
+  <button class="btn primary big" data-act="finish">Terminar entreno</button>`;
+  $('#snotes').addEventListener('change', (ev) => update((st) => (st.activeSession.notes = ev.target.value)));
+  tickElapsed();
+}
+
+function exerciseCard(e, i, s) {
+  const last = lastPerformance(s.sessions, e.name);
+  const lastTxt = last ? last.ex.sets.filter((x) => x.done).map((x) => `${x.kg}×${x.reps}`).join(', ') : '';
+  return `
+  <section class="card ex ${e.sets.every((x) => x.done) ? 'complete' : ''}">
+    <div class="exhead">
+      <div><h3>${esc(e.name)}</h3>
+      <p class="muted small">${MUSCLES[e.muscle] || ''} · ${e.target.sets}×${e.target.repMin}–${e.target.repMax} · RIR ${e.target.rir} · ${Math.round(e.target.restSec / 60 * 10) / 10} min</p></div>
+      <button class="icon" data-act="removeEx" data-ex="${i}" aria-label="Quitar ejercicio">✕</button>
+    </div>
+    ${e.hint ? `<p class="hint">↗ ${esc(e.hint)}</p>` : ''}
+    ${lastTxt ? `<p class="muted small">Última vez (${fmtDate(last.date)}): ${esc(lastTxt)}</p>` : ''}
+    ${e.notes ? `<p class="muted small">ℹ ${esc(e.notes)}</p>` : ''}
+    <div class="sets">
+      <div class="sethead"><span>#</span><span>kg</span><span>reps</span><span>RIR</span><span></span></div>
+      ${e.sets.map((st, j) => `
+      <div class="set ${st.done ? 'done' : ''}">
+        <span class="num">${j + 1}</span>
+        <input type="number" step="0.5" inputmode="decimal" value="${esc(st.kg)}" data-bind="kg" data-ex="${i}" data-set="${j}" aria-label="Kilos serie ${j + 1}">
+        <input type="number" inputmode="numeric" value="${esc(st.reps)}" placeholder="${e.target.reps ?? `${e.target.repMin}–${e.target.repMax}`}" data-bind="reps" data-ex="${i}" data-set="${j}" aria-label="Repeticiones serie ${j + 1}">
+        <input type="number" inputmode="numeric" value="${esc(st.rir)}" placeholder="${e.target.rir}" data-bind="rir" data-ex="${i}" data-set="${j}" aria-label="RIR serie ${j + 1}">
+        <button class="check" data-act="toggleSet" data-ex="${i}" data-set="${j}" aria-label="Marcar serie ${j + 1}">✓</button>
+      </div>`).join('')}
+    </div>
+    <div class="exfoot"><button class="link" data-act="addSet" data-ex="${i}">+ Serie</button>${e.sets.length > 1 ? `<button class="link" data-act="delSet" data-ex="${i}">− Serie</button>` : ''}</div>
+  </section>`;
+}
+
+function tickElapsed() {
+  const el = $('#elapsed');
+  const a = db().activeSession;
+  if (!el || !a) return;
+  const m = Math.floor((Date.now() - a.startedAt) / 60000);
+  el.textContent = `${m} min`;
+  clearTimeout(tickElapsed.t);
+  tickElapsed.t = setTimeout(tickElapsed, 30000);
+}
+
+function finishSession() {
+  const s = db();
+  const a = s.activeSession;
+  const exs = a.exercises.map((e) => ({ ...e, sets: e.sets.filter((x) => x.done) })).filter((e) => e.sets.length);
+  if (!exs.length) { if (!confirm('No marcaste ninguna serie. ¿Descartar el entreno?')) return; update((st) => (st.activeSession = null)); return go('hoy'); }
+  // Récords personales (por e1RM estimado)
+  const prs = [];
+  for (const e of exs) {
+    const best = Math.max(...e.sets.map((x) => e1rm(Number(x.kg), Number(x.reps))));
+    const prev = Math.max(0, ...s.sessions.flatMap((ss) => ss.exercises.filter((z) => z.name === e.name).flatMap((z) => z.sets.map((x) => e1rm(Number(x.kg), Number(x.reps))))));
+    if (best > 0 && prev > 0 && best > prev) prs.push(e.name);
+  }
+  const session = { id: a.id, date: a.date, planId: a.planId, dayId: a.dayId, dayName: a.dayName, week: a.week || null, durationMin: Math.round((Date.now() - a.startedAt) / 60000), notes: a.notes || '', exercises: exs.map(({ hint, ...rest }) => rest), prs };
+  update((st) => {
+    st.sessions.push(session);
+    st.activeSession = null;
+    const plan = st.plans.find((p) => p.id === a.planId);
+    if (plan && a.dayId) {
+      const idx = plan.days.findIndex((d) => d.id === a.dayId);
+      if (idx >= 0) plan.nextDay = (idx + 1) % plan.days.length;
+    }
+  });
+  stopRest();
+  go('hoy');
+  publishSession(session);
+  if (cloud.enabled && db().settings.coachAfterSession) runPostSession(session.id);
+  else toast(prs.length ? `¡Entreno guardado! Récord en ${prs.join(', ')} 🏆` : '¡Entreno guardado! 💪');
+}
+
+// ---------- Temporizador de descanso ----------
+function startRest(sec) {
+  restTimer = { end: Date.now() + sec * 1000, total: sec };
+  renderRestBar();
+}
+function stopRest() { restTimer = null; renderRestBar(); }
+function renderRestBar() {
+  const bar = $('#rest');
+  document.body.classList.toggle('resting', !!restTimer);
+  if (!restTimer) { bar.hidden = true; return; }
+  const left = Math.max(0, Math.round((restTimer.end - Date.now()) / 1000));
+  bar.hidden = false;
+  bar.innerHTML = `<span class="rlabel">Descanso</span><b>${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}</b>
+    <span class="rtrack"><span style="width:${(left / restTimer.total) * 100}%"></span></span>
+    <button class="link" data-act="restAdd">+30 s</button><button class="link" data-act="restStop">Saltar</button>`;
+  if (left === 0) {
+    try { navigator.vibrate?.([200, 100, 200]); } catch {}
+    beep();
+    toast('¡A por la siguiente serie!');
+    restTimer = null;
+    setTimeout(renderRestBar, 50);
+    return;
+  }
+  clearTimeout(renderRestBar.t);
+  renderRestBar.t = setTimeout(renderRestBar, 1000);
+}
+function beep() {
+  if (!db().settings.restSound) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination); o.frequency.value = 880; g.gain.value = 0.15;
+    o.start(); o.stop(ctx.currentTime + 0.25);
+  } catch {}
+}
+
+// ---------- Rutinas ----------
+function planCard(plan, s, active) {
+  const vol = weeklyVolume(plan);
+  const rows = Object.keys(MUSCLES).map((m) => { const [lo, hi] = volumeTarget(s.profile.level, m); return { label: MUSCLES[m], value: vol[m], lo, hi }; });
+  return `
+  <section class="card ${active ? 'accent' : ''}">
+    <p class="eyebrow">${active ? 'Plan activo · ' : ''}${SOURCE[plan.source] || ''}</p>
+    <h2>${esc(plan.name)}</h2>
+    ${plan.rationale ? `<p class="muted small">${esc(plan.rationale)}</p>` : ''}
+    ${planTimeline(plan, active)}
+    ${active ? recsBlock(plan) : ''}
+    ${plan.days.map((d) => `
+    <details class="day"><summary><b>${esc(d.name)}</b> <span class="muted small">${d.exercises.length} ejercicios · ${esc(d.focus || '')}</span></summary>
+      <ul class="mini">${d.exercises.map((e) => { const rx = prescribe(plan, s.sessions, e, active ? currentWeek(plan) : 1); return `<li><span>${esc(e.name)}${e.notes ? `<br><span class="muted small">${esc(e.notes)}</span>` : ''}</span><span class="muted">${rxLabel(rx)} · RIR ${rx.rir}</span></li>`; }).join('')}</ul>
+      <p class="muted small">${active ? `Prescripción de la semana ${weekInfo(plan, currentWeek(plan)).week}.` : 'Prescripción de la semana 1.'} Cambia cada semana según la fase.</p>
+    </details>`).join('')}
+    <details class="day"><summary><b>Volumen semanal por músculo</b> <span class="muted small">series, objetivo sombreado</span></summary>${volumeBars(rows)}</details>
+    <div class="actions wrap">
+      ${active ? '' : `<button class="btn primary sm" data-act="activate" data-plan="${plan.id}">Activar</button>`}
+      <button class="btn ghost sm" data-act="edit" data-plan="${plan.id}">Editar</button>
+      <button class="btn ghost sm" data-act="duplicate" data-plan="${plan.id}">Duplicar</button>
+      <button class="btn ghost sm danger" data-act="deletePlan" data-plan="${plan.id}">Eliminar</button>
+    </div>
+  </section>`;
+}
+
+// Línea de tiempo de 12 semanas con bloques, descargas y semana actual.
+function planTimeline(plan, active) {
+  const p = plan.program;
+  const cur = active ? currentWeek(plan) : 0;
+  const blocks = blocksFor(p.goal);
+  const cells = Array.from({ length: p.weeks }, (_, i) => {
+    const w = i + 1;
+    const inf = weekInfo(plan, w);
+    const cls = ['wk', `b${inf.block}`, inf.deload ? 'dl' : '', w === cur ? 'now' : '', w < cur ? 'past' : ''].join(' ');
+    return `<span class="${cls}" title="Semana ${w}: ${inf.blockName} · ${inf.label}">${inf.deload ? '↓' : w}</span>`;
+  }).join('');
+  const startTxt = new Date(p.startDate + 'T12:00:00').toLocaleDateString('es', { day: 'numeric', month: 'short' });
+  const endTxt = new Date(+new Date(p.startDate + 'T12:00:00') + (p.weeks * 7 - 1) * 864e5).toLocaleDateString('es', { day: 'numeric', month: 'short' });
+  return `
+  <div class="timeline">
+    <div class="tlhead"><span class="eyebrow">Plan de ${p.weeks} semanas · ${startTxt} – ${endTxt}</span>${cur ? `<span class="pill sm">Semana ${Math.min(cur, p.weeks)}</span>` : ''}</div>
+    <div class="weeks">${cells}</div>
+    <div class="blocks">${blocks.map((b, i) => `<div class="blk b${i + 1}"><b>${i + 1}. ${esc(b.name)}</b><span class="muted small">${esc(b.desc)}</span></div>`).join('')}</div>
+    <p class="muted small">↓ = descarga: mitad de series y más reserva para recuperar. ${MODE_LABEL[p.repMode]}.</p>
+  </div>`;
+}
+
+// ---------- Revisión con IA (ver coachui.js) ----------
+function reviewsBlock(plan) {
+  const revs = plan.reviews || [];
+  return `<div class="aireview">
+    ${cloud.enabled ? '<button class="btn ghost big" data-act="aiReview">💬 Revisar mi progreso con el coach</button>' : ''}
+    ${revs.length ? `<details class="day"><summary><b>Revisiones anteriores</b> <span class="muted small">${revs.length}</span></summary>
+      ${revs.map((r) => `<button class="pitem" data-act="showReview" data-id="${r.id}"><span>Semana ${r.week} · ${fmtDate(r.date)}<br><span class="muted small">${esc(r.summary.slice(0, 90))}…</span></span><span class="muted small">${r.applied.length}/${r.changes.length} cambios</span></button>`).join('')}
+    </details>` : ''}
+  </div>`;
+}
+
+function recsBlock(plan) {
+  const recs = planRecs(plan);
+  if (!recs.length) return `<div class="rec good"><b>Todo en línea</b><p class="small">Cuando tengas al menos 2 sesiones de un ejercicio, aquí verás si vas por delante o por detrás del plan y qué ajustar.</p></div>${reviewsBlock(plan)}`;
+  return `<div class="recs"><p class="eyebrow">Ajustes recomendados</p>${recs.map((r, i) => `
+    <div class="rec ${r.level}"><b>${esc(r.title)}</b><p class="small">${esc(r.text)}</p>
+      <div class="actions wrap">${r.action ? `<button class="btn primary sm" data-act="applyRec" data-i="${i}">${esc(r.cta || 'Continuar')}</button>` : ''}<button class="btn ghost sm" data-act="dismissRec" data-i="${i}">${r.action ? 'Ahora no' : 'Entendido'}</button></div>
+    </div>`).join('')}</div>${reviewsBlock(plan)}`;
+}
+
+function viewRutinas() {
+  const s = db();
+  const plan = activePlan();
+  main.innerHTML = `
+  <header class="top"><h1>Planes</h1></header>
+  <p class="eyebrow">Crear un plan nuevo</p>
+  <section class="gen">
+    <button class="gencard" data-act="genScience"><span class="gi">⚡</span><b>Al instante</b><span class="muted small">Con ciencia, sin internet</span></button>
+    <a class="gencard" href="#crear"><span class="gi">💬</span><b>Con el coach</b><span class="muted small">Conversando</span></a>
+    <button class="gencard" data-act="newPlan"><span class="gi">✍️</span><b>Desde cero</b><span class="muted small">Tú lo armas</span></button>
+  </section>
+  ${plan ? planCard(plan, s, true) : ''}
+  ${s.plans.filter((p) => p.id !== s.activePlanId).length ? `<h3 class="sect">Otros planes</h3>` : ''}
+  ${s.plans.filter((p) => p.id !== s.activePlanId).reverse().map((p) => planCard(p, s, false)).join('')}`;
+}
+
+function showPlanPreview(plan) {
+  const s = db();
+  openModal(`<p class="eyebrow">Nueva rutina</p>${planCard(plan, s, false).replace('class="card ', 'class="card flat ')}<button class="btn ghost big" data-act="closeModal">Ver después</button>`);
+}
+
+// ---------- Editor de rutina ----------
+function viewEditar() {
+  if (!draft) return go('rutinas');
+  const muscleOpts = (v) => Object.entries(MUSCLES).map(([k, l]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${l}</option>`).join('');
+  main.innerHTML = `
+  <header class="top"><h1>${draft._new ? 'Nueva rutina' : 'Editar rutina'}</h1><button class="btn ghost sm" data-act="cancelEdit">Cancelar</button></header>
+  <label>Nombre de la rutina<input data-draft="name" value="${esc(draft.name)}"></label>
+  <label>Repeticiones durante las 12 semanas<select data-draft="mode">${Object.entries(MODE_LABEL).map(([k, l]) => `<option value="${k}" ${draft.program?.repMode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+  <p class="muted small">"Según la fase" cambia los rangos en cada bloque (más ligero al inicio, más pesado al final). "Fijas" respeta los rangos que pongas abajo. En ambos casos la app calcula el peso de cada semana y programa las descargas.</p>
+  ${draft.days.map((d, i) => `
+  <section class="card">
+    <div class="exhead"><input class="title-in" data-draft="day.name" data-day="${i}" value="${esc(d.name)}" aria-label="Nombre del día">
+      <button class="icon" data-act="delDay" data-day="${i}" aria-label="Eliminar día">✕</button></div>
+    ${d.exercises.map((e, j) => `
+    <div class="edex">
+      <div class="edtop"><b>${esc(e.name)}</b>
+        <span><button class="icon sm" data-act="moveEx" data-day="${i}" data-ex="${j}" data-dir="-1" aria-label="Subir">↑</button><button class="icon sm" data-act="moveEx" data-day="${i}" data-ex="${j}" data-dir="1" aria-label="Bajar">↓</button><button class="icon sm" data-act="delEx" data-day="${i}" data-ex="${j}" aria-label="Quitar">✕</button></span></div>
+      <div class="edgrid">
+        <label>Series<input type="number" inputmode="numeric" data-draft="ex.sets" data-day="${i}" data-ex="${j}" value="${e.sets}"></label>
+        <label>Reps mín<input type="number" inputmode="numeric" data-draft="ex.repMin" data-day="${i}" data-ex="${j}" value="${e.repMin}"></label>
+        <label>Reps máx<input type="number" inputmode="numeric" data-draft="ex.repMax" data-day="${i}" data-ex="${j}" value="${e.repMax}"></label>
+        <label>RIR<input type="number" inputmode="numeric" data-draft="ex.rir" data-day="${i}" data-ex="${j}" value="${e.rir}"></label>
+        <label>Descanso (s)<input type="number" inputmode="numeric" data-draft="ex.restSec" data-day="${i}" data-ex="${j}" value="${e.restSec}"></label>
+        <label>Músculo<select data-draft="ex.muscle" data-day="${i}" data-ex="${j}">${muscleOpts(e.muscle)}</select></label>
+      </div>
+    </div>`).join('')}
+    <button class="btn ghost" data-act="pickForDraft" data-day="${i}">+ Añadir ejercicio</button>
+  </section>`).join('')}
+  <button class="btn ghost big" data-act="addDay">+ Añadir día</button>
+  <button class="btn primary big" data-act="saveDraft">Guardar rutina</button>`;
+}
+
+function newDraft() {
+  draft = withProgram({ id: uid(), name: 'Mi rutina', source: 'propia', createdAt: new Date().toISOString(), rationale: '', nextDay: 0, days: [{ id: uid(), name: 'Día 1', focus: '', exercises: [] }], _new: true }, 'fijo');
+  go('editar');
+}
+
+function exerciseFromLib(ex) {
+  const g = db().profile.goal;
+  const sch = ex.kind === 'c' ? (g === 'fuerza' ? [3, 4, 6, 2, 180] : [3, 6, 10, 2, 150]) : [3, 10, 15, 1, 75];
+  return { name: ex.name, muscle: ex.muscle, sec: ex.sec, kind: ex.kind, sets: sch[0], repMin: sch[1], repMax: sch[2], rir: sch[3], restSec: sch[4], notes: '' };
+}
+
+// ---------- Selector de ejercicios ----------
+function openPicker(cb) {
+  pickerCb = cb;
+  const groups = Object.entries(MUSCLES).map(([m, l]) => {
+    const list = EXERCISES.filter((e) => e.muscle === m);
+    return list.length ? `<div class="pgroup" data-muscle="${m}"><p class="eyebrow">${l}</p>${list.map((e) => `<button class="pitem" data-act="pick" data-name="${esc(e.name)}">${esc(e.name)}<span class="muted small">${e.equip.replace('_', ' ')}</span></button>`).join('')}</div>` : '';
+  }).join('');
+  openModal(`<h2>Añadir ejercicio</h2>
+    <input id="psearch" type="search" placeholder="Buscar…" aria-label="Buscar ejercicio">
+    <div id="plist">${groups}</div>
+    <details class="day"><summary><b>Ejercicio personalizado</b></summary>
+      <label>Nombre<input id="cname" placeholder="Ej.: Press Arnold"></label>
+      <label>Músculo principal<select id="cmuscle">${Object.entries(MUSCLES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+      <label>Tipo<select id="ckind"><option value="c">Compuesto</option><option value="i">Aislamiento</option></select></label>
+      <button class="btn primary" data-act="pickCustom">Añadir</button>
+    </details>`);
+  $('#psearch').addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+    document.querySelectorAll('.pitem').forEach((b) => (b.hidden = q && !b.dataset.name.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').includes(q)));
+    document.querySelectorAll('.pgroup').forEach((g) => (g.hidden = ![...g.querySelectorAll('.pitem')].some((b) => !b.hidden)));
+  });
+}
+
+// ---------- Progreso ----------
+function viewProgreso() {
+  const s = db();
+  const ws = weightStats();
+  const names = [...new Set(s.sessions.flatMap((x) => x.exercises.map((e) => e.name)))].sort();
+  if (!names.includes(progressExercise)) progressExercise = names[0] || '';
+  // Volumen real de los últimos 7 días
+  const since = Date.now() - 7 * 864e5;
+  const real = Object.fromEntries(Object.keys(MUSCLES).map((m) => [m, 0]));
+  for (const ss of s.sessions.filter((x) => +new Date(x.date + 'T12:00:00') >= since)) {
+    for (const e of ss.exercises) {
+      const n = e.sets.length;
+      if (real[e.muscle] !== undefined) real[e.muscle] += n;
+      for (const m of e.sec || exerciseByName(e.name)?.sec || []) if (real[m] !== undefined) real[m] += n * 0.5;
+    }
+  }
+  const [rlo, rhi] = weightRateTarget(s.profile.goal);
+  const protein = s.profile.weight ? [Math.round(s.profile.weight * 1.6), Math.round(s.profile.weight * 2.2)] : null;
+
+  const plan = activePlan();
+  const status = plan ? exerciseStatus(plan, s.sessions) : [];
+  const planExs = plan ? uniqueExercises(plan) : [];
+  if (!planExs.some((e) => e.name === planExercise)) planExercise = (status.find((x) => x.n > 0) || status[0])?.ex.name || '';
+  const ST = { arriba: ['Por delante', 'good'], linea: ['En línea', 'ok'], abajo: ['Por debajo', 'warn'], sin: ['Sin datos', 'muted'] };
+  const pct = (r) => (r == null ? '—' : `${r >= 1 ? '+' : ''}${n1((r - 1) * 100)} %`);
+
+  main.innerHTML = `
+  <header class="top"><h1>Progreso</h1></header>
+
+  ${plan ? `
+  <section class="card">
+    <div class="exhead"><h3>Plan vs real</h3><span class="pill">Semana ${weekInfo(plan, currentWeek(plan)).week} de ${WEEKS}</span></div>
+    <p class="muted small">Línea punteada: lo que deberías levantar según el plan. Línea continua: lo que levantas de verdad (1RM estimado con tus reps en reserva).</p>
+    <select id="psel" aria-label="Ejercicio del plan">${planExs.map((e) => `<option ${e.name === planExercise ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select>
+    <div id="pchart"></div>
+    <table class="stable">
+      <thead><tr><th>Ejercicio</th><th>vs plan</th><th>Estado</th></tr></thead>
+      <tbody>${status.map((x) => `<tr data-act="pickPlanEx" data-name="${esc(x.ex.name)}" class="${x.ex.name === planExercise ? 'sel' : ''}"><td>${esc(x.ex.name)}</td><td class="num">${pct(x.ratio)}</td><td><span class="chip ${ST[x.status][1]}">${ST[x.status][0]}</span></td></tr>`).join('')}</tbody>
+    </table>
+    <p class="muted small">"Por delante" o "por debajo" = más de un 3 % de diferencia en la última sesión. Con 2 sesiones seguidas, la app te propone un ajuste en Rutinas.</p>
+  </section>` : ''}
+
+  <section class="card">
+    <div class="exhead"><h3>Peso corporal</h3>${ws ? `<span class="pill">${n1(ws.nowAvg)} kg</span>` : ''}</div>
+    <div id="wchart"></div>
+    <p class="muted small">Ritmo actual: <b>${ws?.rate == null ? '—' : (ws.rate > 0 ? '+' : '') + n1(ws.rate) + ' % por semana'}</b> · objetivo para ${GOALS[s.profile.goal].toLowerCase()}: ${rlo > 0 ? '+' : ''}${rlo.toLocaleString('es')} a ${rhi > 0 ? '+' : ''}${rhi.toLocaleString('es')} %/sem${protein ? ` · proteína sugerida: ${protein[0]}–${protein[1]} g/día` : ''}</p>
+    ${ws ? `<details class="day"><summary><b>Registros</b> <span class="muted small">${ws.w.length}</span></summary><ul class="mini">${[...ws.w].reverse().map((w) => `<li><span>${fmtDate(w.date)}</span><span>${n1(w.kg)} kg <button class="icon sm" data-act="delWeight" data-id="${w.id}" aria-label="Borrar">✕</button></span></li>`).join('')}</ul></details>` : ''}
+  </section>
+
+  <section class="card">
+    <h3>Fuerza por ejercicio</h3>
+    ${names.length ? `<select id="exsel" aria-label="Ejercicio">${names.map((n) => `<option ${n === progressExercise ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
+    <div id="echart"></div><div id="ebest"></div>` : `<p class="empty">Completa tu primer entreno para ver tu progreso de fuerza.</p>`}
+  </section>
+
+  <section class="card">
+    <h3>Series de los últimos 7 días</h3>
+    <p class="muted small">Series hechas por músculo (secundario = 0,5). Zona sombreada = rango recomendado para tu nivel.</p>
+    ${volumeBars(Object.keys(MUSCLES).map((m) => { const [lo, hi] = volumeTarget(s.profile.level, m); return { label: MUSCLES[m], value: real[m], lo, hi }; }))}
+  </section>
+
+  <section class="card">
+    <h3>Historial</h3>
+    ${s.sessions.length ? [...s.sessions].reverse().slice(0, 40).map((x) => `
+    <details class="day"><summary><b>${esc(x.dayName)}</b> <span class="muted small">${fmtDate(x.date)} · ${x.durationMin} min · ${x.exercises.reduce((a, e) => a + e.sets.length, 0)} series${x.prs?.length ? ' · 🏆' : ''}</span></summary>
+      <ul class="mini">${x.exercises.map((e) => `<li><span>${esc(e.name)}</span><span class="muted">${e.sets.map((z) => `${z.kg}×${z.reps}`).join(', ')}</span></li>`).join('')}</ul>
+      ${x.notes ? `<p class="muted small">${esc(x.notes)}</p>` : ''}
+      <button class="link danger" data-act="delSession" data-id="${x.id}">Eliminar entreno</button>
+    </details>`).join('') : '<p class="empty">Aún no hay entrenos.</p>'}
+  </section>`;
+
+  if (plan && planExercise) {
+    renderPlanChart(plan);
+    $('#psel').addEventListener('change', (e) => { planExercise = e.target.value; viewProgreso(); });
+  }
+  if (ws) lineChart($('#wchart'), { unit: 'kg', series: [{ name: 'Pesaje', kind: 'dots', points: ws.w.map((w) => ({ x: w.date, y: w.kg })) }, { name: 'Media 7 días', kind: 'line', points: ws.series }] });
+  else $('#wchart').innerHTML = '<p class="empty">Registra tu peso en Hoy.</p>';
+  if (names.length) {
+    renderExerciseChart();
+    $('#exsel').addEventListener('change', (e) => { progressExercise = e.target.value; renderExerciseChart(); });
+  }
+}
+
+function renderPlanChart(plan) {
+  const ex = uniqueExercises(plan).find((e) => e.name === planExercise);
+  const t = exerciseTrack(plan, db().sessions, ex);
+  if (!t.planned.length) {
+    $('#pchart').innerHTML = `<p class="empty">Haz tu primera sesión de ${esc(ex.name)}: será la calibración y desde ahí la app proyecta tus 12 semanas.</p>`;
+    return;
+  }
+  lineChart($('#pchart'), {
+    unit: t.unit,
+    decimals: t.bw ? 0 : 1,
+    series: [
+      { name: 'Plan', kind: 'plan', points: t.planned },
+      { name: 'Real', kind: 'line', points: t.real },
+    ],
+  });
+}
+
+function renderExerciseChart() {
+  const s = db();
+  const pts = [];
+  let best = null;
+  for (const x of s.sessions) {
+    const e = x.exercises.find((z) => z.name === progressExercise);
+    if (!e) continue;
+    let top = 0;
+    for (const st of e.sets) {
+      const v = e1rm(Number(st.kg), Number(st.reps));
+      if (v > top) top = v;
+      if (!best || v > best.v) best = { v, kg: st.kg, reps: st.reps, date: x.date };
+    }
+    if (top > 0) {
+      const prev = pts.find((p) => p.x === x.date);
+      if (prev) prev.y = Math.max(prev.y, top); else pts.push({ x: x.date, y: top });
+    }
+  }
+  lineChart($('#echart'), { unit: 'kg', series: [{ name: '1RM estimado', kind: 'line', points: pts }] });
+  $('#ebest').innerHTML = best && best.v > 0 ? `<p class="muted small">Mejor serie: <b>${best.kg} kg × ${best.reps}</b> (${fmtDate(best.date)}) · 1RM estimado ${n1(best.v)} kg (fórmula de Epley)</p>` : '';
+}
+
+// ---------- Perfil ----------
+function viewPerfil() {
+  const s = db();
+  const acc = cloud.enabled && cloud.user;
+  main.innerHTML = `
+  <header class="top"><h1>Perfil</h1></header>
+
+  ${acc ? `
+  <section class="card account">
+    <div class="acchead">${avatar(cloud.me?.display_name || s.profile.name, 'lg')}<div><h2>${esc(cloud.me?.display_name || s.profile.name || '')}</h2><p class="muted small">@${esc(cloud.me?.username || '')} · ${esc(cloud.user.email || '')}</p></div></div>
+    <form id="nform" class="inline"><input name="dn" value="${esc(cloud.me?.display_name || '')}" maxlength="40" aria-label="Nombre visible para tus amigos"><button class="btn ghost" type="submit">Cambiar</button></form>
+    <p class="muted small">Tu nombre visible para tus amigos.</p>
+    <div class="actions wrap"><button class="btn ghost sm" data-act="invite">Invitar amigos</button><button class="btn ghost sm" data-act="logout">Cerrar sesión</button></div>
+  </section>
+
+  <section class="card">
+    <h3>Coach con IA</h3>
+    <div id="usage" class="muted small">Cargando consumo…</div>
+    <label class="switch"><input type="checkbox" data-setting="coachAfterSession" ${s.settings.coachAfterSession ? 'checked' : ''}> Comentario del coach al terminar cada entreno</label>
+    <label class="switch"><input type="checkbox" data-setting="weeklyReview" ${s.settings.weeklyReview ? 'checked' : ''}> Revisión automática cada semana</label>
+  </section>` : cloud.enabled ? '' : `
+  <section class="card"><h3>Modo local</h3><p class="muted small">Esta copia de ${APP_NAME} funciona sin cuentas: no hay amigos ni coach con IA. Conecta Supabase en <code>js/config.js</code> para activarlos.</p></section>`}
+
+  <form id="pform" class="card form"><h3>Tu entrenamiento</h3>${profileForm(s.profile)}
+    <button class="btn primary" type="submit">Guardar</button>
+    <p class="muted small">Si cambias objetivo, días o equipo, crea un plan nuevo en Planes.</p>
+  </form>
+
+  <section class="card">
+    <h3>Base científica</h3>
+    ${PRINCIPLES.map((p) => `<details class="day"><summary><b>${p.t}</b></summary><p class="small">${p.d}</p><p class="muted small">${p.ref}</p></details>`).join('')}
+  </section>
+
+  <section class="card">
+    <h3>Tus datos</h3>
+    <p class="muted small">${acc ? 'Se guardan en este celular y se sincronizan con tu cuenta.' : 'Todo se guarda en este celular. Exporta un respaldo de vez en cuando.'}</p>
+    <label class="switch"><input type="checkbox" data-setting="restSound" ${s.settings.restSound ? 'checked' : ''}> Sonido al terminar el descanso</label>
+    <div class="actions wrap">
+      <button class="btn ghost sm" data-act="export">Exportar respaldo</button>
+      <label class="btn ghost sm">Importar<input type="file" id="imp" accept="application/json" hidden></label>
+      <button class="btn ghost sm danger" data-act="reset">Borrar mis datos</button>
+    </div>
+  </section>
+  <p class="muted small center">${APP_NAME} v0.5${cloud.mockMode ? ' · modo prueba' : ''}</p>`;
+
+  $('#pform').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const p = readProfile(e.target);
+    update((st) => { st.profile = { ...st.profile, ...p }; });
+    toast('Perfil guardado');
+  });
+  $('#nform')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const dn = new FormData(e.target).get('dn').trim();
+    if (!dn) return;
+    try { await cloud.updateDisplayName(dn); toast('Nombre actualizado'); render(); } catch (err) { toast(err.message); }
+  });
+  $('#imp').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try { importJSON(await f.text()); toast('Respaldo importado'); render(); } catch (err) { alert('No se pudo importar: ' + err.message); }
+  });
+  if (acc) cloud.usage().then((u) => {
+    const el = $('#usage');
+    if (!el) return;
+    if (!u) { el.textContent = 'No se pudo cargar el consumo.'; return; }
+    const lim = u.limitCents ?? 200;
+    const pct = Math.min(100, Math.round((u.usedCents / lim) * 100));
+    el.innerHTML = `<div class="meter"><span style="width:${pct}%"></span></div>Este mes: ${pct} % de tu cupo del coach usado. Se renueva el día 1.`;
+  });
+}
+
+// ---------- Acciones ----------
+Object.assign(actions, {
+  start: (el) => {
+    if (db().activeSession && !confirm('Ya tienes un entreno en curso. ¿Reemplazarlo?')) return go('entreno');
+    startSession(el.dataset.day);
+  },
+  skipDay: () => go('entreno'),
+  toggleSet: (el) => {
+    const i = +el.dataset.ex, j = +el.dataset.set;
+    let rest = 0;
+    update((st) => {
+      const e = st.activeSession.exercises[i];
+      const set = e.sets[j];
+      set.done = !set.done;
+      if (set.done) {
+        if (set.reps === '') set.reps = e.target.reps ?? e.target.repMax;
+        if (set.rir === '') set.rir = e.target.rir;
+        // propaga el peso a las series siguientes vacías
+        for (let k = j + 1; k < e.sets.length; k++) if (e.sets[k].kg === '' && !e.sets[k].done) e.sets[k].kg = set.kg;
+        rest = e.target.restSec;
+      }
+    });
+    if (rest) startRest(rest);
+    viewEntreno();
+  },
+  addSet: (el) => { update((st) => { const e = st.activeSession.exercises[+el.dataset.ex]; const l = e.sets[e.sets.length - 1]; e.sets.push({ kg: l?.kg ?? '', reps: '', rir: '', done: false }); }); viewEntreno(); },
+  delSet: (el) => { update((st) => { const e = st.activeSession.exercises[+el.dataset.ex]; if (e.sets.length > 1) e.sets.pop(); }); viewEntreno(); },
+  removeEx: (el) => { if (!confirm('¿Quitar este ejercicio del entreno?')) return; update((st) => st.activeSession.exercises.splice(+el.dataset.ex, 1)); viewEntreno(); },
+  pickForSession: () => openPicker((ex) => {
+    const a = db().activeSession;
+    const plan = db().plans.find((p) => p.id === a.planId);
+    const item = sessionExercise(ex, plan, plan && a.week ? currentWeek(plan) : null, db().sessions);
+    update((st) => st.activeSession.exercises.push(item));
+    viewEntreno();
+  }),
+  finish: () => finishSession(),
+  cancelSession: () => { if (confirm('¿Descartar este entreno? No se guardará.')) { update((st) => (st.activeSession = null)); stopRest(); go('hoy'); } },
+  restAdd: () => { if (restTimer) { restTimer.end += 30000; restTimer.total += 30; renderRestBar(); } },
+  restStop: () => stopRest(),
+
+  choiceCoach: () => go('crear'),
+  choiceScience: () => { generateSciencePlan(); go('hoy'); },
+  genScience: () => {
+    const plan = withProgram(generatePlan(db().profile));
+    update((st) => st.plans.push(plan));
+    showPlanPreview(plan);
+  },
+  newPlan: () => newDraft(),
+  activate: (el) => {
+    update((st) => {
+      st.activePlanId = el.dataset.plan;
+      const p = st.plans.find((x) => x.id === el.dataset.plan);
+      // Si nunca se ha usado, el plan de 12 semanas arranca hoy.
+      if (p && !st.sessions.some((x) => x.planId === p.id)) { p.program.startDate = today(); p.nextDay = 0; }
+    });
+    const p = activePlan();
+    cloud.publish('plan', { planName: p.name, days: p.days.length, source: p.source });
+    closeModal(); toast('Plan activado: empieza la semana 1'); go('rutinas');
+  },
+  edit: (el) => { draft = clone(db().plans.find((p) => p.id === el.dataset.plan)); closeModal(); go('editar'); },
+  duplicate: (el) => { const p = clone(db().plans.find((x) => x.id === el.dataset.plan)); p.id = uid(); p.name += ' (copia)'; p.source = 'propia'; p.reviews = []; p.days.forEach((d) => (d.id = uid())); withProgram(p, p.program?.repMode); update((st) => st.plans.push(p)); closeModal(); toast('Plan duplicado'); render(); },
+  applyRec: (el) => {
+    const plan = activePlan();
+    const rec = planRecs(plan)[+el.dataset.i];
+    if (!rec) return;
+    if (rec.action === 'nextPlan') return actions.genScience();
+    if (rec.action === 'aiReview') return cloud.enabled ? actions.aiReview() : actions.genScience();
+    if (rec.action === 'fewerDays') { update((st) => dismissRec(st.plans.find((p) => p.id === plan.id), rec, today())); toast('Cambia los días en tu perfil y crea un plan nuevo'); return go('perfil'); }
+    update((st) => applyRec(st.plans.find((p) => p.id === plan.id), st.sessions, rec, today()));
+    toast(rec.action === 'deloadNow' ? 'Descarga adelantada a esta semana' : 'Objetivos recalculados');
+    render();
+  },
+  dismissRec: (el) => {
+    const plan = activePlan();
+    const rec = planRecs(plan)[+el.dataset.i];
+    if (rec) update((st) => dismissRec(st.plans.find((p) => p.id === plan.id), rec, today()));
+    render();
+  },
+  deletePlan: (el) => {
+    if (!confirm('¿Eliminar este plan? Tu historial de entrenos se conserva.')) return;
+    update((st) => { st.plans = st.plans.filter((p) => p.id !== el.dataset.plan); if (st.activePlanId === el.dataset.plan) st.activePlanId = st.plans[0]?.id || null; });
+    closeModal(); render();
+  },
+
+  cancelEdit: () => { draft = null; go('rutinas'); },
+  addDay: () => { draft.days.push({ id: uid(), name: `Día ${draft.days.length + 1}`, focus: '', exercises: [] }); viewEditar(); },
+  delDay: (el) => { if (draft.days.length > 1 && confirm('¿Eliminar este día?')) { draft.days.splice(+el.dataset.day, 1); viewEditar(); } },
+  delEx: (el) => { draft.days[+el.dataset.day].exercises.splice(+el.dataset.ex, 1); viewEditar(); },
+  moveEx: (el) => { const arr = draft.days[+el.dataset.day].exercises; const i = +el.dataset.ex, j = i + +el.dataset.dir; if (j < 0 || j >= arr.length) return; [arr[i], arr[j]] = [arr[j], arr[i]]; viewEditar(); },
+  pickForDraft: (el) => { const d = +el.dataset.day; openPicker((ex) => { draft.days[d].exercises.push(ex); viewEditar(); }); },
+  saveDraft: () => {
+    if (draft.days.some((d) => !d.exercises.length)) return alert('Cada día necesita al menos un ejercicio.');
+    const isNew = draft._new; delete draft._new;
+    draft.days.forEach((d) => { d.focus = [...new Set(d.exercises.map((e) => MUSCLES[e.muscle]))].slice(0, 4).join(', '); d.exercises.forEach((e) => { e.repMax = Math.max(e.repMax, e.repMin); }); });
+    update((st) => { const i = st.plans.findIndex((p) => p.id === draft.id); if (i >= 0) st.plans[i] = draft; else st.plans.push(draft); if (isNew || !st.activePlanId) st.activePlanId = draft.id; });
+    draft = null; toast('Plan guardado'); go('rutinas');
+  },
+
+  pick: (el) => { const ex = exerciseByName(el.dataset.name); closeModal(); pickerCb?.(exerciseFromLib(ex)); },
+  pickCustom: () => {
+    const name = $('#cname').value.trim();
+    if (!name) return;
+    const ex = { name, muscle: $('#cmuscle').value, sec: [], kind: $('#ckind').value, equip: '' };
+    closeModal(); pickerCb?.(exerciseFromLib(ex));
+  },
+  closeModal: () => closeModal(),
+  pickPlanEx: (el) => { planExercise = el.dataset.name; viewProgreso(); document.querySelector('#pchart')?.scrollIntoView({ block: 'center' }); },
+
+  delWeight: (el) => { update((st) => (st.weights = st.weights.filter((w) => w.id !== el.dataset.id))); render(); },
+  delSession: (el) => { if (confirm('¿Eliminar este entreno del historial?')) { update((st) => (st.sessions = st.sessions.filter((x) => x.id !== el.dataset.id))); render(); } },
+  export: () => {
+    const blob = new Blob([exportJSON()], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `forja-respaldo-${today()}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  },
+  reset: () => {
+    if (!(confirm(`Esto borra TODOS tus datos de entrenamiento${cloud.user ? ' de este celular y de tu cuenta' : ' de este celular'}. ¿Seguro?`) && confirm('Última confirmación: ¿borrar todo?'))) return;
+    resetAll(!!cloud.user); draft = null; location.hash = ''; render();
+  },
+  logout: async () => {
+    if (db().activeSession && !confirm('Tienes un entreno en curso. ¿Cerrar sesión igual?')) return;
+    await cloud.signOut();
+    resetAll(false);
+    location.hash = '';
+    render();
+  },
+});
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act]');
+  if (!el) {
+    if (e.target.id === 'modal' && $('#modal').dataset.closable) closeModal();
+    return;
+  }
+  const fn = actions[el.dataset.act];
+  if (fn) { if (el.tagName !== 'A') e.preventDefault(); fn(el, e); }
+});
+
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  if (el.dataset.setting) {
+    update((st) => (st.settings[el.dataset.setting] = el.checked));
+  } else if (el.dataset.bind) {
+    // Inputs de series (entreno en curso)
+    update((st) => { st.activeSession.exercises[+el.dataset.ex].sets[+el.dataset.set][el.dataset.bind] = el.value === '' ? '' : Number(el.value); });
+  } else if (el.dataset.draft && draft) {
+    const [scope, field] = el.dataset.draft.split('.');
+    const val = el.type === 'number' ? Number(el.value) : el.value;
+    if (scope === 'name') draft.name = el.value;
+    else if (scope === 'mode') draft.program.repMode = el.value;
+    else if (scope === 'day') draft.days[+el.dataset.day][field] = val;
+    else if (scope === 'ex') draft.days[+el.dataset.day].exercises[+el.dataset.ex][field] = val;
+  }
+});
+
+// ---------- Arranque ----------
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+
+async function afterLogin() {
+  await cloud.syncOnLogin({
+    askAdoptLocal: async () => confirm('Este celular tiene entrenos guardados sin cuenta. ¿Quieres pasarlos a tu cuenta? (Si cancelas, se usarán los datos que ya tienes en la nube.)'),
+  });
+  await consumeInvite();
+}
+
+cloud.onAuthChange(async (u, reason) => {
+  if (u && reason !== 'pulled') { try { await afterLogin(); } catch (e) { console.error(e); toast('No se pudo sincronizar. Seguiremos intentando.'); } }
+  render();
+});
+
+(async function boot() {
+  main.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const u = await cloud.init();
+    if (u) await afterLogin();
+  } catch (e) {
+    console.error(e);
+    toast('Sin conexión con la nube: usando los datos de este celular.');
+  }
+  booted = true;
+  render();
+})();
+
+export { afterLogin, showPlanPreview, planCard };

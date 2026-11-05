@@ -1,0 +1,2 @@
+// Utilidades sin dependencias del navegador (se comparten con el servidor).
+export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
