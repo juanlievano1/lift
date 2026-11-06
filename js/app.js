@@ -642,7 +642,7 @@ async function sendChanges() {
   const plan = db().plans.find((p) => p.id === changeReq?.planId);
   if (!plan) return closeModal();
   changeReq.request = request;
-  openModal(`<p class="eyebrow">Ajustar rutina</p><h2>Ajustando tu rutina…</h2><p class="muted">Puede tardar unos segundos.</p><div class="spinner" aria-hidden="true"></div>`, false);
+  openModal(`<p class="eyebrow">Ajustar rutina</p><h2>Ajustando tu rutina…</h2><p class="muted">Puede tardar hasta medio minuto. No cierres la app.</p><div class="spinner" aria-hidden="true"></div>`, false);
   try {
     const slim = { name: plan.name, days: plan.days.map((d) => ({ name: d.name, exercises: d.exercises.map(({ name, muscle, kind, sets, repMin, repMax, rir, restSec }) => ({ name, muscle, kind, sets, repMin, repMax, rir, restSec })) })) };
     const res = await cloud.adjustPlan({ plan: slim, profile: db().profile, request });

@@ -17,4 +17,4 @@ export const DEMO = false;
 export const COACH_ENABLED = false;
 // "¿No te gusta algo? Pídenos cambios": ajusta la rutina con IA (acción "adjust" de la función coach).
 // Se enciende cuando la función con esa acción está desplegada en Supabase.
-export const ADJUST_ENABLED = false;
+export const ADJUST_ENABLED = true;
