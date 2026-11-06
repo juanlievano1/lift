@@ -41,6 +41,7 @@ export function viewAuth() {
       <button class="btn ghost" data-act="authMode" data-mode="signup">Crear cuenta</button>
       <button class="btn ghost" data-act="authMode" data-mode="login">Entrar</button>
     </div>
+    <p class="muted small center">Al continuar aceptas la <a href="privacidad.html">política de privacidad</a>.</p>
     ${cloud.mockMode ? '<p class="demo-note"><b>Versión de prueba.</b> Las cuentas, los amigos y las respuestas del coach son simulados y todo se guarda solo en este celular.</p>' : ''}`;
     return;
   }

@@ -55,6 +55,7 @@ async function supabaseBackend() {
       return must(await q);
     },
     async publish(id, kind, payload) { must(await sb.from('activity').insert({ user_id: id, kind, payload })); },
+    async feedback(f) { must(await sb.from('feedback').insert(f)); },
     async cheer(activityId, on) {
       const me = await uidNow();
       if (on) must(await sb.from('cheers').insert({ activity_id: activityId, user_id: me }));
@@ -194,6 +195,13 @@ async function flushOutbox() {
 }
 
 export const feed = (userId) => api.feed(userId);
+
+// Comentarios de los usuarios (los lee el dueño en Supabase).
+export async function sendFeedback({ screen, message, version }) {
+  if (!enabled || !user) throw new Error('Inicia sesión para enviar comentarios.');
+  if (!navigator.onLine) throw new Error('Necesitas conexión para enviar el comentario.');
+  await api.feedback({ screen: String(screen).slice(0, 40), message: String(message).slice(0, 2000), app_version: String(version).slice(0, 20) });
+}
 export const cheer = (id, on) => api.cheer(id, on);
 
 // ---------- Amigos ----------

@@ -4,13 +4,14 @@ import { db, today } from './db.js';
 import { weightRateTarget } from './science.js';
 import { newProgram, weekOf, review } from './program.js';
 import { n1 } from './ui.js';
+import { COACH_ENABLED } from './config.js';
 
-export const MODE_LABEL = { fases: 'Reps según la fase', fijo: 'Reps fijas (las tuyas)' };
-export const SOURCE = { ciencia: 'Generado con ciencia', ia: 'Creado con el coach', propia: 'Plan propio' };
+export const MODE_LABEL = { doble: 'Progresión doble', fases: 'Plan por fases de 12 semanas', fijo: 'Tus reps, con fases y descargas' };
+export const SOURCE = { ciencia: 'Creada con ciencia', ia: 'Creada con el coach', propia: 'Tu rutina' };
 
 // Convierte una rutina en un plan de 12 semanas que empieza hoy.
 export function withProgram(plan, repMode) {
-  plan.program = newProgram(db().profile, today(), repMode || (plan.source === 'propia' ? 'fijo' : 'fases'));
+  plan.program = newProgram(db().profile, today(), repMode || (plan.source === 'propia' ? 'doble' : 'fases'));
   return plan;
 }
 
@@ -49,5 +50,10 @@ export function weightText() {
 export function planRecs(plan) {
   if (!plan?.program) return [];
   const ws = weightStats();
-  return review(plan, db().sessions, { now: today(), profile: db().profile, weightRate: ws?.rate ?? null });
+  const recs = review(plan, db().sessions, { now: today(), profile: db().profile, weightRate: ws?.rate ?? null });
+  if (COACH_ENABLED) return recs;
+  // Sin coach: el cierre de bloque es informativo y al terminar se propone una rutina nueva.
+  return recs.map((r) => (r.action !== 'aiReview' ? r : r.key === 'fin'
+    ? { ...r, text: 'Terminaste tu plan. Crea el siguiente: tus marcas actuales serán el punto de partida.', action: 'nextPlan', cta: 'Crear el siguiente' }
+    : { ...r, text: r.text.replace(' Buen momento para revisar el bloque con IA.', ''), action: null, cta: null }));
 }

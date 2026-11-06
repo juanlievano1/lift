@@ -181,6 +181,9 @@ const SPLITS = {
 };
 
 // Esquema de series/reps/RIR/descanso por objetivo (compuesto vs aislamiento).
+// Series, reps, RIR y descanso sugeridos para un ejercicio según objetivo y nivel.
+export const exerciseDefaults = (profile, kind) => scheme(profile?.goal, profile?.level, kind);
+
 function scheme(goal, level, kind) {
   const base = {
     fuerza: kind === 'c' ? [4, 6, 2, 180] : [8, 12, 1, 90],

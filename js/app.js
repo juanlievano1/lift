@@ -1,11 +1,12 @@
 import { db, update, uid, today, activePlan, exportJSON, importJSON, resetAll, requestPersistence } from './db.js';
-import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, PRIORITIES, TIME_RANGES, timeRangeOf, timeLabel, estimateMinutes, generatePlan, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName } from './science.js';
+import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, PRIORITIES, exerciseDefaults, TIME_RANGES, timeRangeOf, timeLabel, estimateMinutes, generatePlan, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName } from './science.js';
 import { lineChart, volumeBars } from './charts.js';
-import { WEEKS, ensureProgram, weekInfo, prescribe, exerciseTrack, exerciseStatus, uniqueExercises, applyRec, dismissRec, blocksFor, planReport, applyReviewChanges } from './program.js';
+import { reviewRoutine, applyFix } from './routine.js';
+import { WEEKS, newProgram, ensureProgram, weekInfo, prescribe, exerciseTrack, exerciseStatus, uniqueExercises, applyRec, dismissRec, blocksFor, planReport, applyReviewChanges } from './program.js';
 import { $, esc, fmtDate, n1, clone, toast, openModal, closeModal, modalOpen, actions, routes, setRenderer, go, avatar } from './ui.js';
 import { MODE_LABEL, SOURCE, withProgram, rxLabel, currentWeek, weekStart, weightStats, weightText, planRecs } from './domain.js';
 import * as cloud from './cloud.js';
-import { APP_NAME } from './config.js';
+import { APP_NAME, COACH_ENABLED } from './config.js';
 import { viewAuth, consumeInvite } from './auth.js';
 import { viewAmigos, publishSession } from './social.js';
 import { viewCoach, viewCrear, runPostSession, maybeWeeklyReview, coachBanner } from './coachui.js';
@@ -32,8 +33,11 @@ function render() {
   if (!s.profile) return viewOnboarding();
   if (s.plans.some((p) => !p.program)) update((st) => st.plans.forEach((p) => ensureProgram(p, st.profile)));
   if (route === 'crear' && !s.plans.length) document.body.classList.add('onboarding');
+  if (!COACH_ENABLED && (route === 'coach' || route === 'crear')) { location.replace('#hoy'); return; }
   (routes[route] || viewHoy)();
   addProfileButton(route);
+  const coachTab = document.querySelector('.nav a[href="#coach"]');
+  if (coachTab) coachTab.hidden = !COACH_ENABLED;
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('on', a.getAttribute('href') === '#' + route));
   renderRestBar();
   if (!modalOpen()) window.scrollTo(0, 0);
@@ -95,10 +99,10 @@ function viewOnboarding() {
   <section class="hero">
     <div class="logo">${APP_NAME}</div>
     <h1>${name ? `Hola, ${esc(name)}` : 'Tu entrenador de bolsillo'}</h1>
-    <p class="muted">Cuéntame lo básico y te armo al instante tu plan de 12 semanas con base científica. ${cloud.enabled ? 'Después lo puedes ajustar con el coach.' : 'Tus datos se quedan en este celular.'}</p>
+    <p class="muted">Cuéntame lo básico para sugerirte los pesos correctos y revisar tu rutina con base científica.</p>
   </section>
   <form id="onb" class="card form">${profileForm({ name })}
-    <button class="btn primary big" type="submit">Crear mi plan</button>
+    <button class="btn primary big" type="submit">Continuar</button>
   </form>`;
   $('#onb').addEventListener('change', (e) => {
     // Máximo 2 prioridades: más que eso deja de ser prioridad.
@@ -114,9 +118,7 @@ function viewOnboarding() {
       s.weights.push({ id: uid(), date: today(), kg: p.weight });
     });
     requestPersistence();
-    generateSciencePlan();
-    update((st) => (st.coach.newPlanTip = true));
-    go('hoy');
+    viewStart();
   });
 }
 
@@ -149,10 +151,10 @@ function viewHoy() {
   ${coachBanner()}
   ${s.coach.newPlanTip && plan ? `
   <section class="card newplan">
-    <p class="eyebrow">Tu plan está listo</p>
+    <p class="eyebrow">Tu rutina está lista</p>
     <h3>${esc(plan.name)}</h3>
-    <p class="small">${plan.days.length} días por semana durante 12 semanas, con el peso sugerido para cada ejercicio. ${cloud.enabled ? '¿Quieres cambiar algo? Dile al coach qué te gusta, qué no o qué quieres priorizar.' : ''}</p>
-    <div class="actions wrap">${cloud.enabled ? '<a class="btn primary sm" href="#crear" data-act="tipDone">Ajustar con el coach</a>' : ''}<a class="btn ghost sm" href="#rutinas" data-act="tipDone">Ver el plan</a><button class="btn ghost sm" data-act="tipDone">Así está bien</button></div>
+    <p class="small">${plan.days.length} días por semana, con el peso sugerido para cada ejercicio. ¿Quieres cambiar ejercicios, series o repeticiones? Edítala cuando quieras: la app revisa que siga balanceada.</p>
+    <div class="actions wrap"><button class="btn primary sm" data-act="editActive">Editar rutina</button><button class="btn ghost sm" data-act="tipDone">Así está bien</button></div>
   </section>` : ''}
 
   ${s.activeSession ? `
@@ -163,9 +165,9 @@ function viewHoy() {
     <a class="btn primary big" href="#entreno">Continuar</a>
   </section>` : day ? `
   <section class="card accent">
-    <p class="eyebrow">Semana ${info.week} de ${WEEKS} · Bloque ${info.block}: ${esc(info.blockName)}</p>
+    <p class="eyebrow">${info.mode === 'doble' ? `Semana ${info.week} · ${esc(plan.name)}` : `Semana ${info.week} de ${WEEKS} · Bloque ${info.block}: ${esc(info.blockName)}`}</p>
     <h2>${esc(day.name)}</h2>
-    <p class="muted">${info.deload ? '🔋 ' : ''}${esc(info.label)} · ⏱ ≈ ${estimateMinutes(day)} min · ${esc(day.focus || '')}</p>
+    <p class="muted">${info.deload ? '🔋 ' : ''}${info.mode === 'doble' ? '' : esc(info.label) + ' · '}⏱ ≈ ${estimateMinutes(day)} min · ${esc(day.focus || '')}</p>
     <ul class="mini">${day.exercises.map((e) => { const rx = prescribe(plan, s.sessions, e, wk, s.profile); return `<li><span>${esc(e.name)}</span><span class="muted">${rxLabel(rx)}</span></li>`; }).join('')}</ul>
     <div class="actions"><button class="btn primary big" data-act="start" data-day="${day.id}">Empezar entreno</button></div>
     ${plan.days.length > 1 ? `<button class="link" data-act="skipDay">Hacer otro día</button>` : ''}
@@ -187,7 +189,8 @@ function viewHoy() {
       <button class="btn primary" type="submit">Guardar</button>
     </form>
     <p class="muted small">Pésate en ayunas, después del baño. La media de 7 días elimina el ruido diario.</p>
-  </section>`;
+  </section>
+  ${cloud.enabled ? '<button class="link center-block" data-act="feedback">💬 ¿Algo no funciona o tienes una idea? Cuéntanos</button>' : ''}`;
 
   $('#wform').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -346,7 +349,7 @@ function finishSession() {
   stopRest();
   go('hoy');
   publishSession(session);
-  if (cloud.enabled && db().settings.coachAfterSession) runPostSession(session.id);
+  if (COACH_ENABLED && cloud.enabled && db().settings.coachAfterSession) runPostSession(session.id);
   else toast(prs.length ? `¡Entreno guardado! Récord en ${prs.join(', ')} 🏆` : '¡Entreno guardado! 💪');
 }
 
@@ -415,6 +418,11 @@ function planCard(plan, s, active) {
 // Línea de tiempo de 12 semanas con bloques, descargas y semana actual.
 function planTimeline(plan, active) {
   const p = plan.program;
+  if (p.repMode === 'doble') {
+    const cur = active ? currentWeek(plan) : 0;
+    return `<div class="timeline"><div class="tlhead"><span class="eyebrow">Progresión doble${cur ? ` · semana ${cur}` : ''}</span></div>
+      <p class="muted small">${MODE_HELP.doble} Cada ejercicio muestra en Hoy el peso y las reps para la próxima sesión.</p></div>`;
+  }
   const cur = active ? currentWeek(plan) : 0;
   const blocks = blocksFor(p.goal);
   const cells = Array.from({ length: p.weeks }, (_, i) => {
@@ -438,7 +446,7 @@ function planTimeline(plan, active) {
 function reviewsBlock(plan) {
   const revs = plan.reviews || [];
   return `<div class="aireview">
-    ${cloud.enabled ? '<button class="btn ghost big" data-act="aiReview">💬 Revisar mi progreso con el coach</button>' : ''}
+    ${COACH_ENABLED && cloud.enabled ? '<button class="btn ghost big" data-act="aiReview">💬 Revisar mi progreso con el coach</button>' : ''}
     ${revs.length ? `<details class="day"><summary><b>Revisiones anteriores</b> <span class="muted small">${revs.length}</span></summary>
       ${revs.map((r) => `<button class="pitem" data-act="showReview" data-id="${r.id}"><span>Semana ${r.week} · ${fmtDate(r.date)}<br><span class="muted small">${esc(r.summary.slice(0, 90))}…</span></span><span class="muted small">${r.applied.length}/${r.changes.length} cambios</span></button>`).join('')}
     </details>` : ''}
@@ -458,12 +466,11 @@ function viewRutinas() {
   const s = db();
   const plan = activePlan();
   main.innerHTML = `
-  <header class="top"><h1>Planes</h1></header>
-  <p class="eyebrow">Crear un plan nuevo</p>
+  <header class="top"><h1>Rutina</h1></header>
+  <p class="eyebrow">Crear una rutina nueva</p>
   <section class="gen">
-    <button class="gencard" data-act="genScience"><span class="gi">⚡</span><b>Plan nuevo</b><span class="muted small">Al instante, con ciencia</span></button>
-    <a class="gencard" href="#crear"><span class="gi">💬</span><b>Ajustar con el coach</b><span class="muted small">Pide cambios</span></a>
-    <button class="gencard" data-act="newPlan"><span class="gi">✍️</span><b>Desde cero</b><span class="muted small">Tú lo armas</span></button>
+    <button class="gencard" data-act="newPlan"><span class="gi">✍️</span><b>Armar mi rutina</b><span class="muted small">Tus ejercicios</span></button>
+    <button class="gencard" data-act="genScience"><span class="gi">⚡</span><b>Créame una</b><span class="muted small">Al instante, con ciencia</span></button>
   </section>
   ${plan ? planCard(plan, s, true) : ''}
   ${s.plans.filter((p) => p.id !== s.activePlanId).length ? `<h3 class="sect">Otros planes</h3>` : ''}
@@ -475,70 +482,111 @@ function showPlanPreview(plan) {
   openModal(`<p class="eyebrow">Nueva rutina</p>${planCard(plan, s, false).replace('class="card ', 'class="card flat ')}<button class="btn ghost big" data-act="closeModal">Ver después</button>`);
 }
 
-// ---------- Editor de rutina ----------
-function viewEditar() {
-  if (!draft) return go('rutinas');
-  const muscleOpts = (v) => Object.entries(MUSCLES).map(([k, l]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${l}</option>`).join('');
+// ---------- Arma tu rutina (editor) ----------
+// Pantalla para quien ya tiene rutina: elige si la arma o si se la creamos al instante.
+function viewStart() {
+  document.body.classList.add('onboarding');
   main.innerHTML = `
-  <header class="top"><h1>${draft._new ? 'Nueva rutina' : 'Editar rutina'}</h1><button class="btn ghost sm" data-act="cancelEdit">Cancelar</button></header>
-  <label>Nombre de la rutina<input data-draft="name" value="${esc(draft.name)}"></label>
-  <label>Repeticiones durante las 12 semanas<select data-draft="mode">${Object.entries(MODE_LABEL).map(([k, l]) => `<option value="${k}" ${draft.program?.repMode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-  <p class="muted small">"Según la fase" cambia los rangos en cada bloque (más ligero al inicio, más pesado al final). "Fijas" respeta los rangos que pongas abajo. En ambos casos la app calcula el peso de cada semana y programa las descargas.</p>
+  <section class="hero"><div class="logo">${APP_NAME}</div><h1>¿Ya tienes una rutina?</h1>
+    <p class="muted">Si ya sabes qué ejercicios haces, ármala y la app te dice cuánto peso poner y cuándo subir. Si no, te creamos una con base científica.</p></section>
+  <button class="card choice" data-act="startOwn">
+    <span class="gi">✍️</span><span><b>Sí, quiero armar la mía</b><br><span class="muted small">Pones tus días y ejercicios. La app revisa que esté balanceada y te sugiere los pesos.</span></span>
+  </button>
+  <button class="card choice" data-act="startScience">
+    <span class="gi">⚡</span><span><b>No, créame una al instante</b><br><span class="muted small">Plan de 12 semanas con tu perfil. Luego la puedes editar como quieras.</span></span>
+  </button>`;
+}
+
+// El borrador se guarda en el celular mientras lo editas: si sales o recargas, no se pierde.
+const DRAFT_KEY = 'forja.draft';
+const keepDraft = () => { try { if (draft) localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); else localStorage.removeItem(DRAFT_KEY); } catch {} };
+
+function viewEditar() {
+  if (!draft) { try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch { draft = null; } }
+  if (!draft) return go('rutinas');
+  keepDraft();
+  const profile = db().profile;
+  const review = reviewRoutine(draft, profile);
+  const muscleOpts = (v) => Object.entries(MUSCLES).map(([k, l]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${l}</option>`).join('');
+  const custom = (e) => !exerciseByName(e.name);
+  main.innerHTML = `
+  <header class="top"><div><h1>${draft._new ? 'Tu rutina' : 'Editar rutina'}</h1><p class="muted small">Tus días y ejercicios. La app sugiere los pesos.</p></div><button class="btn ghost sm" data-act="cancelEdit">Cancelar</button></header>
+  <label>Nombre<input data-draft="name" value="${esc(draft.name)}" maxlength="60"></label>
+  <label>Cómo progresar<select data-draft="mode">${Object.entries(MODE_LABEL).map(([k, l]) => `<option value="${k}" ${draft.program?.repMode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+  <p class="muted small">${MODE_HELP[draft.program?.repMode] || ''}</p>
   ${draft.days.map((d, i) => `
-  <section class="card">
-    <div class="exhead"><input class="title-in" data-draft="day.name" data-day="${i}" value="${esc(d.name)}" aria-label="Nombre del día">
-      <button class="icon" data-act="delDay" data-day="${i}" aria-label="Eliminar día">✕</button></div>
+  <section class="card dayedit">
+    <div class="exhead"><input class="title-in" data-draft="day.name" data-day="${i}" value="${esc(d.name)}" aria-label="Nombre del día" maxlength="30">
+      <button class="icon" data-act="delDay" data-day="${i}" aria-label="Eliminar ${esc(d.name)}">✕</button></div>
+    <p class="muted small">${d.exercises.length ? `${d.exercises.length} ejercicios · ≈ ${estimateMinutes(d)} min` : 'Sin ejercicios todavía'}</p>
     ${d.exercises.map((e, j) => `
     <div class="edex">
       <div class="edtop"><b>${esc(e.name)}</b>
         <span><button class="icon sm" data-act="moveEx" data-day="${i}" data-ex="${j}" data-dir="-1" aria-label="Subir">↑</button><button class="icon sm" data-act="moveEx" data-day="${i}" data-ex="${j}" data-dir="1" aria-label="Bajar">↓</button><button class="icon sm" data-act="delEx" data-day="${i}" data-ex="${j}" aria-label="Quitar">✕</button></span></div>
-      <div class="edgrid">
-        <label>Series<input type="number" inputmode="numeric" data-draft="ex.sets" data-day="${i}" data-ex="${j}" value="${e.sets}"></label>
-        <label>Reps mín<input type="number" inputmode="numeric" data-draft="ex.repMin" data-day="${i}" data-ex="${j}" value="${e.repMin}"></label>
-        <label>Reps máx<input type="number" inputmode="numeric" data-draft="ex.repMax" data-day="${i}" data-ex="${j}" value="${e.repMax}"></label>
-        <label>RIR<input type="number" inputmode="numeric" data-draft="ex.rir" data-day="${i}" data-ex="${j}" value="${e.rir}"></label>
-        <label>Descanso (s)<input type="number" inputmode="numeric" data-draft="ex.restSec" data-day="${i}" data-ex="${j}" value="${e.restSec}"></label>
-        <label>Músculo<select data-draft="ex.muscle" data-day="${i}" data-ex="${j}">${muscleOpts(e.muscle)}</select></label>
+      <div class="exnums">
+        <div class="stepper"><span class="slabel">Series</span><button class="icon sm" data-act="exSets" data-day="${i}" data-ex="${j}" data-d="-1" aria-label="Menos series">−</button><b>${e.sets}</b><button class="icon sm" data-act="exSets" data-day="${i}" data-ex="${j}" data-d="1" aria-label="Más series">+</button></div>
+        <div class="reps"><span class="slabel">Reps</span><input type="number" inputmode="numeric" data-draft="ex.repMin" data-day="${i}" data-ex="${j}" value="${e.repMin}" aria-label="Reps mínimas"><span>–</span><input type="number" inputmode="numeric" data-draft="ex.repMax" data-day="${i}" data-ex="${j}" value="${e.repMax}" aria-label="Reps máximas"></div>
       </div>
+      <details class="more"><summary>Más opciones</summary>
+        <div class="edgrid">
+          <label>RIR<input type="number" inputmode="numeric" data-draft="ex.rir" data-day="${i}" data-ex="${j}" value="${e.rir}"></label>
+          <label>Descanso (s)<input type="number" inputmode="numeric" data-draft="ex.restSec" data-day="${i}" data-ex="${j}" value="${e.restSec}"></label>
+          ${custom(e) ? `<label>Músculo<select data-draft="ex.muscle" data-day="${i}" data-ex="${j}">${muscleOpts(e.muscle)}</select></label>` : ''}
+        </div>
+        <p class="muted small">RIR: repeticiones que te quedan en reserva al terminar la serie (0 = al fallo).</p>
+      </details>
     </div>`).join('')}
-    <button class="btn ghost" data-act="pickForDraft" data-day="${i}">+ Añadir ejercicio</button>
+    <button class="btn ghost" data-act="pickForDraft" data-day="${i}">+ Agregar ejercicio</button>
   </section>`).join('')}
-  <button class="btn ghost big" data-act="addDay">+ Añadir día</button>
+  <button class="btn ghost big" data-act="addDay">+ Agregar día</button>
+
+  <section class="card review">
+    <p class="eyebrow">Revisión científica</p>
+    ${review.map((r, k) => `<div class="rec ${r.level}"><b>${esc(r.title)}</b><p class="small">${esc(r.text)}</p>${r.fix ? `<div class="actions"><button class="btn primary sm" data-act="applyFix" data-i="${k}">${esc(r.fix.label)}</button></div>` : ''}</div>`).join('')}
+  </section>
   <button class="btn primary big" data-act="saveDraft">Guardar rutina</button>`;
 }
 
+const MODE_HELP = {
+  doble: 'Trabajas en tu rango de repeticiones con el mismo peso; cuando completas el tope en todas las series, la app te sube el peso.',
+  fases: 'Plan de 12 semanas en 3 bloques con descargas: la app cambia repeticiones y peso cada semana.',
+  fijo: 'Plan de 12 semanas con tus rangos de repeticiones y descargas cada 4 semanas.',
+};
+
 function newDraft() {
-  draft = withProgram({ id: uid(), name: 'Mi rutina', source: 'propia', createdAt: new Date().toISOString(), rationale: '', nextDay: 0, days: [{ id: uid(), name: 'Día 1', focus: '', exercises: [] }], _new: true }, 'fijo');
+  const n = Math.max(1, Math.min(6, Number(db().profile?.days) || 3));
+  draft = { id: uid(), name: 'Mi rutina', source: 'propia', createdAt: new Date().toISOString(), rationale: '', nextDay: 0, days: Array.from({ length: n }, (_, k) => ({ id: uid(), name: `Día ${k + 1}`, focus: '', exercises: [] })), _new: true };
+  withProgram(draft, 'doble');
   go('editar');
 }
 
 function exerciseFromLib(ex) {
-  const g = db().profile.goal;
-  const sch = ex.kind === 'c' ? (g === 'fuerza' ? [3, 4, 6, 2, 180] : [3, 6, 10, 2, 150]) : [3, 10, 15, 1, 75];
-  return { name: ex.name, muscle: ex.muscle, sec: ex.sec, kind: ex.kind, sets: sch[0], repMin: sch[1], repMax: sch[2], rir: sch[3], restSec: sch[4], notes: '' };
+  return { name: ex.name, muscle: ex.muscle, sec: ex.sec || [], kind: ex.kind, ...exerciseDefaults(db().profile, ex.kind), notes: '' };
 }
 
-// ---------- Selector de ejercicios ----------
+// ---------- Selector de ejercicios (solo gimnasio) ----------
+const inGym = (e) => e.equip !== 'peso_corporal' || e.pattern === 'abdomen';
 function openPicker(cb) {
   pickerCb = cb;
   const groups = Object.entries(MUSCLES).map(([m, l]) => {
-    const list = EXERCISES.filter((e) => e.muscle === m);
-    return list.length ? `<div class="pgroup" data-muscle="${m}"><p class="eyebrow">${l}</p>${list.map((e) => `<button class="pitem" data-act="pick" data-name="${esc(e.name)}">${esc(e.name)}<span class="muted small">${e.equip.replace('_', ' ')}</span></button>`).join('')}</div>` : '';
+    const list = EXERCISES.filter((e) => e.muscle === m && inGym(e));
+    return list.length ? `<div class="pgroup" data-muscle="${m}"><p class="eyebrow">${l}</p>${list.map((e) => `<button class="pitem" data-act="pick" data-name="${esc(e.name)}">${esc(e.name)}<span class="muted small">${e.kind === 'c' ? 'compuesto' : 'aislamiento'}</span></button>`).join('')}</div>` : '';
   }).join('');
-  openModal(`<h2>Añadir ejercicio</h2>
-    <input id="psearch" type="search" placeholder="Buscar…" aria-label="Buscar ejercicio">
+  openModal(`<h2>Agregar ejercicio</h2>
+    <input id="psearch" type="search" placeholder="Buscar: banca, remo, curl…" aria-label="Buscar ejercicio">
     <div id="plist">${groups}</div>
-    <details class="day"><summary><b>Ejercicio personalizado</b></summary>
-      <label>Nombre<input id="cname" placeholder="Ej.: Press Arnold"></label>
+    <details class="day"><summary><b>¿No está? Crea el tuyo</b></summary>
+      <label>Nombre<input id="cname" placeholder="Press Arnold"></label>
       <label>Músculo principal<select id="cmuscle">${Object.entries(MUSCLES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
-      <label>Tipo<select id="ckind"><option value="c">Compuesto</option><option value="i">Aislamiento</option></select></label>
-      <button class="btn primary" data-act="pickCustom">Añadir</button>
+      <label>Tipo<select id="ckind"><option value="c">Compuesto (varias articulaciones)</option><option value="i">Aislamiento (un músculo)</option></select></label>
+      <button class="btn primary" data-act="pickCustom">Agregar</button>
     </details>`);
   $('#psearch').addEventListener('input', (e) => {
     const q = e.target.value.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
     document.querySelectorAll('.pitem').forEach((b) => (b.hidden = q && !b.dataset.name.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').includes(q)));
     document.querySelectorAll('.pgroup').forEach((g) => (g.hidden = ![...g.querySelectorAll('.pitem')].some((b) => !b.hidden)));
   });
+  setTimeout(() => $('#psearch')?.focus(), 50);
 }
 
 // ---------- Progreso ----------
@@ -678,12 +726,12 @@ function viewPerfil() {
     <div class="actions wrap"><button class="btn ghost sm" data-act="invite">Invitar amigos</button><button class="btn ghost sm" data-act="logout">Cerrar sesión</button></div>
   </section>
 
-  <section class="card">
+  ${COACH_ENABLED ? `  <section class="card">
     <h3>Coach con IA</h3>
     <div id="usage" class="muted small">Cargando consumo…</div>
     <label class="switch"><input type="checkbox" data-setting="coachAfterSession" ${s.settings.coachAfterSession ? 'checked' : ''}> Comentario del coach al terminar cada entreno</label>
     <label class="switch"><input type="checkbox" data-setting="weeklyReview" ${s.settings.weeklyReview ? 'checked' : ''}> Revisión automática cada semana</label>
-  </section>` : cloud.enabled ? '' : `
+  </section>` : ''}` : cloud.enabled ? '' : `
   <section class="card"><h3>Modo local</h3><p class="muted small">Esta copia de ${APP_NAME} funciona sin cuentas: no hay amigos ni coach con IA. Conecta Supabase en <code>js/config.js</code> para activarlos.</p></section>`}
 
   <form id="pform" class="card form"><h3>Tu entrenamiento</h3>${profileForm(s.profile)}
@@ -706,9 +754,11 @@ function viewPerfil() {
       <button class="btn ghost sm danger" data-act="reset">Borrar mis datos</button>
     </div>
   </section>
+  ${acc ? '<button class="btn ghost big" data-act="feedback">💬 Enviar comentario o idea</button>' : ''}
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
-  <p class="muted small center">${APP_NAME} v0.6${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
+  <p class="muted small center">${APP_NAME} v0.7${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -794,6 +844,35 @@ Object.assign(actions, {
   restAdd: () => { if (restTimer) { restTimer.end += 30000; restTimer.total += 30; renderRestBar(); } },
   restStop: () => stopRest(),
 
+  feedback: () => {
+    openModal(`<h2>Cuéntanos</h2>
+      <p class="muted small">¿Algo no funciona, te confundió o se te ocurre una idea? Lo lee directamente quien hace la app.</p>
+      <textarea id="fbmsg" rows="5" maxlength="2000" placeholder="Ej.: no encontré cómo cambiar un ejercicio en mi rutina"></textarea>
+      <p class="formerr" id="fberr" hidden></p>
+      <button class="btn primary big" data-act="sendFeedback">Enviar</button>`);
+    setTimeout(() => $('#fbmsg')?.focus(), 50);
+  },
+  sendFeedback: async (el) => {
+    const msg = $('#fbmsg').value.trim();
+    const err = $('#fberr');
+    if (!msg) { err.textContent = 'Escribe tu comentario antes de enviar.'; err.hidden = false; return; }
+    el.disabled = true; el.textContent = 'Enviando…';
+    try {
+      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.7' });
+      closeModal(); toast('¡Gracias! Comentario enviado');
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; el.disabled = false; el.textContent = 'Enviar'; }
+  },
+  startOwn: () => newDraft(),
+  startScience: () => { generateSciencePlan(); update((st) => (st.coach.newPlanTip = true)); go('hoy'); },
+  editActive: () => { update((st) => (st.coach.newPlanTip = false)); draft = clone(activePlan()); go('editar'); },
+  exSets: (el) => { const e = draft.days[+el.dataset.day].exercises[+el.dataset.ex]; e.sets = Math.max(1, Math.min(8, (Number(e.sets) || 3) + Number(el.dataset.d))); const y = scrollY; viewEditar(); window.scrollTo(0, y); },
+  applyFix: (el) => {
+    const item = reviewRoutine(draft, db().profile)[+el.dataset.i];
+    if (!item?.fix) return;
+    applyFix(draft, item.fix, db().profile);
+    toast('Listo: ' + item.fix.label.toLowerCase());
+    const y = scrollY; viewEditar(); window.scrollTo(0, y);
+  },
   tipDone: (el) => { update((st) => (st.coach.newPlanTip = false)); if (el.tagName !== 'A') render(); },
   choiceScience: () => { generateSciencePlan(); go('hoy'); },
   genScience: () => {
@@ -820,7 +899,7 @@ Object.assign(actions, {
     const rec = planRecs(plan)[+el.dataset.i];
     if (!rec) return;
     if (rec.action === 'nextPlan') return actions.genScience();
-    if (rec.action === 'aiReview') return cloud.enabled ? actions.aiReview() : actions.genScience();
+    if (rec.action === 'aiReview') return COACH_ENABLED && cloud.enabled ? actions.aiReview() : actions.genScience();
     if (rec.action === 'fewerDays') { update((st) => dismissRec(st.plans.find((p) => p.id === plan.id), rec, today())); toast('Cambia los días en tu perfil y crea un plan nuevo'); return go('perfil'); }
     update((st) => applyRec(st.plans.find((p) => p.id === plan.id), st.sessions, rec, today()));
     toast(rec.action === 'deloadNow' ? 'Descarga adelantada a esta semana' : 'Objetivos recalculados');
@@ -838,18 +917,21 @@ Object.assign(actions, {
     closeModal(); render();
   },
 
-  cancelEdit: () => { draft = null; go('rutinas'); },
+  cancelEdit: () => { draft = null; keepDraft(); go('rutinas'); },
   addDay: () => { draft.days.push({ id: uid(), name: `Día ${draft.days.length + 1}`, focus: '', exercises: [] }); viewEditar(); },
   delDay: (el) => { if (draft.days.length > 1 && confirm('¿Eliminar este día?')) { draft.days.splice(+el.dataset.day, 1); viewEditar(); } },
   delEx: (el) => { draft.days[+el.dataset.day].exercises.splice(+el.dataset.ex, 1); viewEditar(); },
   moveEx: (el) => { const arr = draft.days[+el.dataset.day].exercises; const i = +el.dataset.ex, j = i + +el.dataset.dir; if (j < 0 || j >= arr.length) return; [arr[i], arr[j]] = [arr[j], arr[i]]; viewEditar(); },
   pickForDraft: (el) => { const d = +el.dataset.day; openPicker((ex) => { draft.days[d].exercises.push(ex); viewEditar(); }); },
   saveDraft: () => {
-    if (draft.days.some((d) => !d.exercises.length)) return alert('Cada día necesita al menos un ejercicio.');
+    if (!draft.days.length) return alert('Agrega al menos un día.');
+    if (draft.days.some((d) => !d.exercises.length)) return alert('Cada día necesita al menos un ejercicio (o bórralo).');
     const isNew = draft._new; delete draft._new;
-    draft.days.forEach((d) => { d.focus = [...new Set(d.exercises.map((e) => MUSCLES[e.muscle]))].slice(0, 4).join(', '); d.exercises.forEach((e) => { e.repMax = Math.max(e.repMax, e.repMin); }); });
-    update((st) => { const i = st.plans.findIndex((p) => p.id === draft.id); if (i >= 0) st.plans[i] = draft; else st.plans.push(draft); if (isNew || !st.activePlanId) st.activePlanId = draft.id; });
-    draft = null; toast('Plan guardado'); go('rutinas');
+    draft.days.forEach((d) => { d.focus = [...new Set(d.exercises.map((e) => MUSCLES[e.muscle]))].slice(0, 4).join(', '); d.exercises.forEach((e) => { if (Number(e.repMin) > Number(e.repMax)) [e.repMin, e.repMax] = [e.repMax, e.repMin]; }); });
+    const saved = draft;
+    update((st) => { const i = st.plans.findIndex((p) => p.id === saved.id); if (i >= 0) st.plans[i] = saved; else st.plans.push(saved); if (isNew || !st.activePlanId) st.activePlanId = saved.id; st.coach.newPlanTip = false; });
+    if (isNew) cloud.publish('plan', { planName: saved.name, days: saved.days.length, source: 'propia' });
+    draft = null; keepDraft(); toast(isNew ? '¡Rutina lista! Mira tu primer entreno en Hoy' : 'Rutina guardada'); go(isNew ? 'hoy' : 'rutinas');
   },
 
   pick: (el) => { const ex = exerciseByName(el.dataset.name); closeModal(); pickerCb?.(exerciseFromLib(ex)); },
@@ -912,9 +994,11 @@ document.addEventListener('change', (e) => {
     const [scope, field] = el.dataset.draft.split('.');
     const val = el.type === 'number' ? Number(el.value) : el.value;
     if (scope === 'name') draft.name = el.value;
-    else if (scope === 'mode') draft.program.repMode = el.value;
+    else if (scope === 'mode') draft.program = { ...newProgram(db().profile, draft.program.startDate, el.value), adjust: draft.program.adjust || {} };
     else if (scope === 'day') draft.days[+el.dataset.day][field] = val;
     else if (scope === 'ex') draft.days[+el.dataset.day].exercises[+el.dataset.ex][field] = val;
+    // La revisión y la duración se recalculan con cada cambio.
+    if (scope !== 'name' && location.hash.startsWith('#editar')) { const y = scrollY; viewEditar(); window.scrollTo(0, y); }
   }
 });
 

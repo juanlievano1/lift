@@ -2,6 +2,7 @@
 // Toda llamada a Claude pasa por el servidor (cloud.coach), que controla el cupo de cada persona.
 
 import * as cloud from './cloud.js';
+import { COACH_ENABLED } from './config.js';
 import { db, update, uid, today, activePlan } from './db.js';
 import { MUSCLES, weeklyVolume, volumeTarget, lastPerformance } from './science.js';
 import { WEEKS, weekOf, weekInfo, planReport, applyReviewChanges, exerciseStatus, dismissRec } from './program.js';
@@ -246,6 +247,7 @@ function storeReview(plan, res, { week, kind, finished, question }) {
 }
 
 export async function maybeWeeklyReview() {
+  if (!COACH_ENABLED) return;
   if (weeklyRunning || !cloud.enabled || !cloud.user || !navigator.onLine) return;
   const s = db();
   const plan = activePlan();
@@ -276,6 +278,7 @@ export async function maybeWeeklyReview() {
 const rerenderIfHome = () => { if ((location.hash || '#hoy').startsWith('#hoy') && !$('#modal').innerHTML) rerender(); };
 
 export function coachBanner() {
+  if (!COACH_ENABLED) return '';
   if (!cloud.enabled || !cloud.user) return '';
   const plan = activePlan();
   const rev = plan?.reviews?.find((r) => r.unseen);

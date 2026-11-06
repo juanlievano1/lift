@@ -110,6 +110,7 @@ export function mockBackend() {
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .map((a) => ({ ...a, author: pub(d.users.find((u) => u.id === a.user_id)), cheers: d.cheers.filter((c) => c.activity_id === a.id).map((c) => ({ user_id: c.user_id })) }));
     },
+    async feedback(f) { (d.feedback ||= []).push({ ...f, user_id: meId(), created_at: new Date().toISOString() }); store(d); },
     async publish(uid, kind, payload) { d.activity.push({ id: id(), user_id: uid, kind, payload, created_at: new Date().toISOString() }); store(d); },
     async cheer(aid, on) { const me = meId(); d.cheers = d.cheers.filter((c) => !(c.activity_id === aid && c.user_id === me)); if (on) d.cheers.push({ activity_id: aid, user_id: me }); store(d); },
     async usage(uid) { return { usedCents: d.usage[uid] || 0 }; },

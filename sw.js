@@ -1,10 +1,10 @@
 // Service worker: deja la app disponible sin internet.
 // Sube VERSION cada vez que cambies archivos para que el celular descargue la versión nueva.
-const VERSION = 'lift-v7';
+const VERSION = 'lift-v9';
 const SHELL = [
   './', './index.html', './styles.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/util.js', './js/science.js', './js/program.js', './js/charts.js',
-  './js/ui.js', './js/domain.js', './js/config.js', './js/cloud.js', './js/auth.js', './js/social.js', './js/coachui.js', './js/mock.js',
+  './js/ui.js', './js/domain.js', './js/config.js', './js/cloud.js', './js/auth.js', './js/social.js', './js/coachui.js', './js/mock.js', './js/routine.js', './privacidad.html',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
 ];
 

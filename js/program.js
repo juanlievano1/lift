@@ -45,9 +45,13 @@ function weeklyRate(level, goal, kind, bodyweight) {
   return r;
 }
 
+// repMode: 'fases' (plan periodizado de 12 semanas), 'fijo' (tus reps, periodizado) o
+// 'doble' (tu rutina con progresión doble, sin fases ni fecha de fin).
 export function newProgram(profile, startDate, repMode = 'fases') {
-  return { weeks: WEEKS, startDate, goal: profile.goal, level: profile.level, repMode, deloads: [4, 8, 12], adjust: {}, dismissed: [] };
+  const doble = repMode === 'doble';
+  return { weeks: doble ? 52 : WEEKS, startDate, goal: profile.goal, level: profile.level, repMode, deloads: doble ? [] : [4, 8, 12], adjust: {}, dismissed: [] };
 }
+export const isDouble = (plan) => plan?.program?.repMode === 'doble';
 
 // Asegura que cualquier rutina (incluidas las antiguas o las propias) tenga un plan de 12 semanas.
 export function ensureProgram(plan, profile) {
@@ -61,6 +65,10 @@ export const weekDate = (plan, w) => new Date(isoToMs(plan.program.startDate) + 
 
 export function weekInfo(plan, w) {
   const p = plan.program;
+  if (p.repMode === 'doble') {
+    const week = Math.max(1, Math.min(w, p.weeks));
+    return { week, block: 1, inBlock: 1, deload: false, mode: 'doble', blockName: 'Tu rutina', blockDesc: 'Progresión doble', label: 'Progresión doble', finished: w > p.weeks };
+  }
   const week = Math.max(1, Math.min(w, p.weeks));
   const block = Math.min(Math.ceil(week / 4), 3);
   const inBlock = week - (block - 1) * 4;
@@ -136,6 +144,7 @@ function roundLoad(kg, ex) {
 // Prescripción de un ejercicio para una semana concreta.
 // profile (opcional): permite sugerir el peso inicial antes de la primera sesión.
 export function prescribe(plan, sessions, ex, w, profile = null) {
+  if (plan.program.repMode === 'doble') return prescribeDouble(plan, sessions, ex, profile);
   const info = weekInfo(plan, w);
   const kind = ex.kind || exerciseByName(ex.name)?.kind || 'c';
   const lvl = plan.program.level;
@@ -172,6 +181,76 @@ export function prescribe(plan, sessions, ex, w, profile = null) {
     text = `Objetivo: ${fmtKg(kg)} kg${perHand(ex.name) ? ' por mancuerna' : ''} × ${targetReps} reps, RIR ${rir}${info.deload ? ' (descarga: más ligero, recupera)' : ''}.`;
   }
   return { sets, repMin, repMax, rir, restSec, targetReps, kg, text, deload: info.deload };
+}
+
+// ---------- Progresión doble (rutinas propias) ----------
+// Trabajas en un rango de repeticiones con el mismo peso. Cuando completas el tope del rango en
+// todas las series, subes el peso y vuelves al mínimo. Si te quedas muy corto, la carga baja.
+const LOWER_BODY = new Set(['cuadriceps', 'isquios', 'gluteos', 'gemelos']);
+
+function lastLog(sessions, name) {
+  for (let i = sessions.length - 1; i >= 0; i--) {
+    const e = sessions[i].exercises.find((x) => x.name === name);
+    const done = e?.sets.filter((x) => x.done !== false && x.reps !== '' && x.reps != null);
+    if (done?.length) return { date: sessions[i].date, sets: done };
+  }
+  return null;
+}
+
+function loadStep(ex) {
+  const lib = exerciseByName(ex.name);
+  const eq = lib?.equip;
+  const base = eq === 'mancuernas' ? 2 : eq === 'barra' || eq === 'maquina' || eq === 'polea' ? 2.5 : 1;
+  // En piernas con barra o máquina se progresa más rápido.
+  return LOWER_BODY.has(ex.muscle || lib?.muscle) && (eq === 'barra' || eq === 'maquina') && (lib?.kind || ex.kind) === 'c' ? base * 2 : base;
+}
+
+export function prescribeDouble(plan, sessions, ex, profile = null) {
+  const kind = ex.kind || exerciseByName(ex.name)?.kind || 'c';
+  const repMin = Number(ex.repMin) || (kind === 'c' ? 6 : 10);
+  const repMax = Math.max(Number(ex.repMax) || (kind === 'c' ? 10 : 15), repMin);
+  const sets = Number(ex.sets) || 3;
+  const rir = Number.isFinite(Number(ex.rir)) && ex.rir !== '' ? Number(ex.rir) : 2;
+  const restSec = Number(ex.restSec) || (kind === 'c' ? 150 : 75);
+  const bw = isBodyweight(ex);
+  const hand = perHand(ex.name) ? ' por mancuerna' : '';
+  const base = { sets, repMin, repMax, rir, restSec, deload: false };
+  const last = lastLog(sessions, ex.name);
+
+  if (!last) {
+    const target = Math.min(repMax, repMin + 1);
+    const est = !bw && estimateStart1RM(profile, ex.name);
+    if (est) {
+      const kg = roundLoad(est / (1 + (target + rir) / 30), ex);
+      return { ...base, targetReps: target, kg, text: `Peso sugerido para empezar: ${fmtKg(kg)} kg${hand} × ${target} reps (estimado con tu peso y nivel). Si te sobran más de ${rir} reps o no llegas, ajústalo: así la app aprende tu nivel.` };
+    }
+    return { ...base, targetReps: target, kg: null, text: bw ? `Primera vez: haz ${target}–${repMax} reps por serie dejando ${rir} en reserva.` : `Primera vez: elige un peso con el que hagas ${target} reps dejando ${rir} en reserva.` };
+  }
+
+  const kgs = last.sets.map((x) => Number(x.kg) || 0);
+  const top = Math.max(...kgs);
+  const atTop = last.sets.filter((x) => (Number(x.kg) || 0) === top);
+  const reps = atTop.map((x) => Number(x.reps) || 0);
+  const minReps = Math.min(...reps);
+  const avgRir = atTop.reduce((a, x) => a + (Number(x.rir) || 0), 0) / atTop.length;
+  const completed = atTop.length >= sets && minReps >= repMax;
+
+  if (bw) {
+    if (completed) return { ...base, targetReps: repMax, kg: null, text: `Completaste ${repMax} reps en todas las series: hazlo más difícil (lastre, pausa o tempo lento) y vuelve a ${repMin}.` };
+    return { ...base, targetReps: Math.min(repMax, minReps + 1), kg: null, text: `Busca ${Math.min(repMax, minReps + 1)} reps en cada serie (la vez pasada: ${reps.join(', ')}).` };
+  }
+  if (completed) {
+    // Si además te sobraron muchas reps en reserva, el salto es doble.
+    const jump = loadStep(ex) * (avgRir >= rir + 2 ? 2 : 1);
+    const kg = roundLoad(top + jump, ex);
+    return { ...base, targetReps: repMin, kg, text: `¡Subes peso! Completaste ${repMax} reps en todas las series: ${fmtKg(top)} → ${fmtKg(kg)} kg${hand}. Vuelve a ${repMin} reps y sube desde ahí.` };
+  }
+  if (minReps < repMin - 1) {
+    const kg = roundLoad(top * 0.9, ex);
+    return { ...base, targetReps: repMin, kg, text: `La vez pasada te quedaste corto (${reps.join(', ')} reps). Baja a ${fmtKg(kg)} kg${hand} y busca ${repMin} reps con buena técnica.` };
+  }
+  const target = Math.min(repMax, Math.max(repMin, minReps + 1));
+  return { ...base, targetReps: target, kg: top, text: `Mantén ${fmtKg(top)} kg${hand} y busca ${target} reps en cada serie (la vez pasada: ${reps.join(', ')}). Al llegar a ${repMax} en todas, subes peso.` };
 }
 
 // Series de plan vs real para un ejercicio (para graficar).
@@ -259,7 +338,7 @@ export function review(plan, sessions, { now, profile, weightRate }) {
     if (profile.goal === 'hipertrofia' && weightRate < 0) recs.push({ key: 'peso', level: 'info', title: 'Para ganar músculo conviene un ligero superávit', text: `Tu peso baja (${weightRate.toFixed(2)} %/semana). Apunta a +0,25–0,5 %/semana para no frenar la progresión.` });
   }
 
-  if (info.inBlock === 4 && !info.finished && tracked.length) {
+  if (p.repMode !== 'doble' && info.inBlock === 4 && !info.finished && tracked.length) {
     const c = { arriba: 0, linea: 0, abajo: 0 };
     tracked.forEach((s) => c[s.status] !== undefined && c[s.status]++);
     recs.push({ key: 'bloque', level: 'info', title: `Cierre del bloque ${info.block}: ${info.blockName}`, text: `${c.arriba} por delante, ${c.linea} en línea y ${c.abajo} por debajo del plan. Esta semana descarga; la próxima empieza el bloque ${info.block + 1} con nuevos rangos de repeticiones. Buen momento para revisar el bloque con IA.`, action: 'aiReview', cta: 'Revisar con IA' });
