@@ -6,6 +6,20 @@
   <title>Lift</title>
   <meta name="description" content="Planes de 12 semanas con base científica, coach con IA y tus amigos.">
   <meta name="theme-color" content="#f6f2ec">
+  <script>
+    // Color de la app guardado solo en este celular (para probar paletas sin cambiarla a los demás).
+    // Se elige en Perfil o con ?tema=azul | mixto | brasa en el enlace.
+    (function () {
+      try {
+        var u = new URL(location.href), q = u.searchParams.get('tema');
+        if (q === 'azul' || q === 'mixto') localStorage.setItem('lift.tema', q);
+        if (q === 'brasa') localStorage.removeItem('lift.tema');
+        if (q) { u.searchParams.delete('tema'); history.replaceState(null, '', u.pathname + u.search + u.hash); }
+        var t = localStorage.getItem('lift.tema');
+        if (t) { document.documentElement.dataset.theme = t; document.querySelector('meta[name=theme-color]').content = '#eef1ff'; }
+      } catch (e) {}
+    })();
+  </script>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="preconnect" href="https://fonts.googleapis.com">

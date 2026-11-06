@@ -446,3 +446,22 @@ button.chip { border: 1px solid var(--line); cursor: pointer; text-transform: no
 .exfoot .swap { margin-left: auto; }
 #modal .chips { flex-wrap: wrap; overflow: visible; }
 .tipcard { border-color: var(--accent); background: var(--accent-soft); }
+
+/* Paleta "mixto" (prueba): fondo azul suave y textos azul petróleo, con el naranja para las acciones. */
+:root[data-theme="mixto"] {
+  --bg: #eef1ff;
+  --surface: #ffffff;
+  --surface-2: #f2f4fc;
+  --line: #dce2f5;
+  --ink: #1e2a44;
+  --ink-2: #3a4560;
+  --muted: #6b7080;
+  --accent: #ec5a1c;
+  --accent-strong: #c2410c;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(236, 90, 28, 0.1);
+  --series-0: #ec5a1c;
+  --series-1: #1e2a44;
+  --band: rgba(211, 220, 255, 0.7);
+}
+:root[data-theme="mixto"] .card.accent { background: linear-gradient(165deg, #e3e9ff, var(--surface) 55%); border-color: #c5d0f5; }
