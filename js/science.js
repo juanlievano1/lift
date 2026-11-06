@@ -66,6 +66,7 @@ export const EXERCISES = [
   L('banca_mc', 'Press de banca con mancuernas', 'empuje_h', 'pecho', ['triceps', 'hombros'], 'mancuernas', 'c'),
   L('fondos', 'Fondos en paralelas', 'empuje_h', 'pecho', ['triceps'], 'barra_fija', 'c'),
   L('flexiones', 'Flexiones', 'empuje_h', 'pecho', ['triceps', 'hombros'], 'peso_corporal', 'c'),
+  L('inclinado_barra', 'Press inclinado con barra', 'empuje_h', 'pecho', ['triceps', 'hombros'], 'barra', 'c'),
   // Empuje vertical
   L('militar', 'Press militar con barra', 'empuje_v', 'hombros', ['triceps'], 'barra', 'c'),
   L('hombro_mc', 'Press de hombro con mancuernas', 'empuje_v', 'hombros', ['triceps'], 'mancuernas', 'c'),
@@ -131,6 +132,8 @@ export const EXERCISES = [
   L('curl_polea', 'Curl en polea', 'biceps', 'biceps', [], 'polea', 'i'),
   L('curl_martillo', 'Curl martillo', 'biceps', 'biceps', [], 'mancuernas', 'i'),
   L('chin_neg', 'Dominadas supinas negativas', 'biceps', 'biceps', ['espalda'], 'barra_fija', 'c'),
+  L('curl_mc', 'Curl con mancuernas', 'biceps', 'biceps', [], 'mancuernas', 'i'),
+  L('curl_predicador', 'Curl predicador', 'biceps', 'biceps', [], 'barra', 'i'),
   // Tríceps
   L('ext_polea', 'Extensión de tríceps en polea', 'triceps', 'triceps', [], 'polea', 'i'),
   L('ext_overhead', 'Extensión de tríceps sobre la cabeza', 'triceps', 'triceps', [], 'polea', 'i'),
@@ -143,6 +146,7 @@ export const EXERCISES = [
   L('talones_prensa', 'Elevación de talones en prensa', 'gemelos', 'gemelos', [], 'maquina', 'i'),
   L('talones_mc', 'Elevación de talones con mancuerna', 'gemelos', 'gemelos', [], 'mancuernas', 'i'),
   L('talones_pc', 'Elevación de talones a una pierna', 'gemelos', 'gemelos', [], 'peso_corporal', 'i'),
+  L('talones_sentado', 'Elevación de talones sentado', 'gemelos', 'gemelos', [], 'maquina', 'i'),
   // Abdomen
   L('crunch_polea', 'Crunch en polea', 'abdomen', 'abdomen', [], 'polea', 'i'),
   L('piernas_colgado', 'Elevación de piernas colgado', 'abdomen', 'abdomen', [], 'barra_fija', 'i'),
@@ -337,7 +341,7 @@ function balanceVolume(plan, profile) {
 // 1RM típico como fracción del peso corporal (hombre de nivel intermedio). Son referencias aproximadas
 // de estándares de fuerza: sirven para no empezar a ciegas; la primera sesión calibra el plan.
 const START_RATIO = {
-  banca: 1.0, inclinado_mc: 0.32, press_pecho_maq: 0.9, banca_mc: 0.36,
+  banca: 1.0, inclinado_mc: 0.32, press_pecho_maq: 0.9, banca_mc: 0.36, inclinado_barra: 0.85,
   militar: 0.6, hombro_mc: 0.24, hombro_maq: 0.55,
   jalon: 0.8, jalon_neutro: 0.8, pullover_mc: 0.3,
   remo_polea: 0.8, remo_barra: 0.85, remo_mc: 0.42, remo_maq: 0.75,
@@ -348,12 +352,12 @@ const START_RATIO = {
   aperturas_polea: 0.2, pec_deck: 0.6, aperturas_mc: 0.15,
   lat_polea: 0.08, lat_mc: 0.12, lat_maq: 0.35,
   face_pull: 0.35, reverse_deck: 0.4, pajaros: 0.1,
-  curl_barra: 0.45, curl_inclinado: 0.15, curl_polea: 0.35, curl_martillo: 0.18,
+  curl_barra: 0.45, curl_inclinado: 0.15, curl_polea: 0.35, curl_martillo: 0.18, curl_mc: 0.18, curl_predicador: 0.38,
   ext_polea: 0.4, ext_overhead: 0.35, frances: 0.35, ext_overhead_mc: 0.3,
-  talones_maq: 1.2, talones_prensa: 1.6, talones_mc: 0.3, crunch_polea: 0.6,
+  talones_maq: 1.2, talones_prensa: 1.6, talones_mc: 0.3, talones_sentado: 0.8, crunch_polea: 0.6,
 };
 // Ejercicios donde el peso es por cada mancuerna.
-const PER_HAND = new Set(['inclinado_mc', 'banca_mc', 'hombro_mc', 'remo_mc', 'bulgara_mc', 'rumano_mc', 'zancadas_mc', 'step_up_mc', 'rumano_1p_mc', 'aperturas_mc', 'lat_mc', 'pajaros', 'curl_inclinado', 'curl_martillo', 'talones_mc']);
+const PER_HAND = new Set(['inclinado_mc', 'banca_mc', 'hombro_mc', 'remo_mc', 'bulgara_mc', 'rumano_mc', 'zancadas_mc', 'step_up_mc', 'rumano_1p_mc', 'aperturas_mc', 'lat_mc', 'pajaros', 'curl_inclinado', 'curl_martillo', 'curl_mc', 'talones_mc']);
 const UPPER = new Set(['pecho', 'espalda', 'hombros', 'biceps', 'triceps']);
 const LEVEL_FACTOR = { principiante: 0.6, intermedio: 1, avanzado: 1.3 };
 

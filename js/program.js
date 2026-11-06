@@ -137,7 +137,7 @@ function roundLoad(kg, ex) {
   const lib = exerciseByName(ex.name);
   const eq = lib?.equip;
   const step = eq === 'barra' || eq === 'maquina' || eq === 'polea' ? 2.5 : eq === 'mancuernas' ? 2 : 1;
-  const min = eq === 'barra' ? (['curl_barra', 'frances'].includes(lib.id) ? 10 : 20) : eq === 'maquina' ? 5 : eq === 'polea' ? 2.5 : eq === 'mancuernas' ? 2 : step;
+  const min = eq === 'barra' ? (['curl_barra', 'frances', 'curl_predicador'].includes(lib.id) ? 10 : 20) : eq === 'maquina' ? 5 : eq === 'polea' ? 2.5 : eq === 'mancuernas' ? 2 : step;
   return Math.max(min, Math.round(kg / step) * step);
 }
 
