@@ -109,7 +109,8 @@ export function reviewRoutine(plan, profile) {
   });
 
   if (!items.some((x) => x.level === 'warn')) items.unshift({ id: 'ok', level: 'good', title: 'Tu rutina está bien balanceada', text: 'El volumen por músculo, la duración y el orden están dentro de lo recomendado.' });
-  return items;
+  const rank = { good: 0, warn: 1, info: 2 };
+  return items.sort((a, b) => rank[a.level] - rank[b.level]);
 }
 
 // Aplica el arreglo de una sugerencia (muta el plan).
