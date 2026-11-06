@@ -64,7 +64,7 @@ export function reviewRoutine(plan, profile) {
         const ex = room < need && !small ? suggestExercise(m, plan) : null;
         if (ex) {
           const di = bestDay(plan, m);
-          items.push({ id: `poco-${m}`, level: small ? 'info' : 'warn', title: `Pocas series de ${MUSCLES[m].toLowerCase()}`, text: `${fmt(vol[m])} series a la semana; lo recomendado para tu nivel es ${lo}–${hi}. Tus ejercicios actuales ya tienen muchas series: mejor agrega ${ex.name} en ${plan.days[di].name}.`, fix: { type: 'addExercise', name: ex.name, day: di, label: `Agregar ${ex.name}` } });
+          items.push({ id: `poco-${m}`, level: small ? 'info' : 'warn', title: `Pocas series de ${MUSCLES[m].toLowerCase()}`, text: `${fmt(vol[m])} series a la semana; lo recomendado para tu nivel es ${lo}–${hi}. ${exs.length === 1 ? 'Con un solo ejercicio' : 'Con los ejercicios que tienes'} no alcanza sin pasar de ${cap} series por ejercicio: mejor agrega ${ex.name} en ${plan.days[di].name}.`, fix: { type: 'addExercise', name: ex.name, day: di, label: `Agregar ${ex.name}` } });
           continue;
         }
         items.push({

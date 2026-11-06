@@ -126,6 +126,7 @@ export function mockBackend() {
 }
 
 function mockCoach(action, p) {
+  if (action === 'import') return mockImport(p);
   const name = p.profile?.name || 'crack';
   if (action === 'interview') {
     // Simulación: parte del plan actual y aplica pedidos sencillos (en la versión real lo hace Claude).
@@ -179,4 +180,23 @@ function mockCoach(action, p) {
     return { headline: s.prs?.length ? `Récord en ${s.prs[0].split(' ').slice(0, 3).join(' ')} 🏆` : 'Sesión sólida 💪', comment: `Buen ${s.dayName}: ${s.exercises?.length || 0} ejercicios en ${s.durationMin} min. ${s.prs?.length ? 'Ese récord confirma que el plan te está funcionando. ' : ''}La próxima vez intenta mantener el RIR objetivo en las últimas series.` };
   }
   return {};
+}
+
+// Importación simulada: no lee el archivo, devuelve siempre una rutina torso/pierna de ejemplo.
+function mockImport(p) {
+  if (!p.files?.length && !p.text) return { ok: false, problem: 'Sube un PDF o una foto de tu rutina.' };
+  const lib = (n) => EXERCISES.find((e) => e.name === n);
+  const ex = (name, sets, repMin, repMax, rir, extra = {}) => {
+    const l = lib(name);
+    return { name, original: name, matched: !!l, muscle: l?.muscle || extra.muscle || 'espalda', sec: l?.sec || [], kind: l?.kind || extra.kind || 'c', sets, repMin, repMax, rir, restSec: null, notes: extra.notes || '' };
+  };
+  return {
+    ok: true,
+    name: 'Torso / Pierna (prueba)',
+    notes: 'Versión de prueba: en la app real se lee tu archivo. Progresión: cuando llegues al tope del rango en todas las series, sube el peso.',
+    days: [
+      { name: 'Torso A', exercises: [ex('Press de banca con barra', 3, 6, 8, 2), ex('Remo con pecho apoyado', 3, 8, 10, 2, { notes: 'No está en la biblioteca' }), ex('Jalón al pecho', 2, 8, 12, 2), ex('Elevaciones laterales con mancuernas', 3, 12, 15, 2)] },
+      { name: 'Pierna A', exercises: [ex('Sentadilla con barra', 3, 6, 8, 2), ex('Peso muerto rumano con barra', 3, 8, 10, 2), ex('Prensa de piernas', 2, 10, 12, 2)] },
+    ],
+  };
 }

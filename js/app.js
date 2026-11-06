@@ -472,6 +472,7 @@ function viewRutinas() {
     <button class="gencard" data-act="newPlan"><span class="gi">✍️</span><b>Armar mi rutina</b><span class="muted small">Tus ejercicios</span></button>
     <button class="gencard" data-act="genScience"><span class="gi">⚡</span><b>Créame una</b><span class="muted small">Al instante, con ciencia</span></button>
   </section>
+  ${cloud.enabled ? '<button class="btn ghost big" data-act="importRoutine">📄 Importar desde PDF o fotos</button>' : ''}
   ${plan ? planCard(plan, s, true) : ''}
   ${s.plans.filter((p) => p.id !== s.activePlanId).length ? `<h3 class="sect">Otros planes</h3>` : ''}
   ${s.plans.filter((p) => p.id !== s.activePlanId).reverse().map((p) => planCard(p, s, false)).join('')}`;
@@ -492,9 +493,69 @@ function viewStart() {
   <button class="card choice" data-act="startOwn">
     <span class="gi">✍️</span><span><b>Sí, quiero armar la mía</b><br><span class="muted small">Pones tus días y ejercicios. La app revisa que esté balanceada y te sugiere los pesos.</span></span>
   </button>
+  ${cloud.enabled ? `<button class="card choice" data-act="importRoutine">
+    <span class="gi">📄</span><span><b>La tengo en PDF o en fotos</b><br><span class="muted small">Súbela y la app la pasa a ${APP_NAME}. Luego la revisas y ajustas lo que haga falta.</span></span>
+  </button>` : ''}
   <button class="card choice" data-act="startScience">
     <span class="gi">⚡</span><span><b>No, créame una al instante</b><br><span class="muted small">Plan de 12 semanas con tu perfil. Luego la puedes editar como quieras.</span></span>
   </button>`;
+}
+
+// ---------- Importar una rutina desde PDF o fotos ----------
+const toBase64 = (blob) => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res(String(r.result).split(',')[1]);
+  r.onerror = () => rej(new Error('No pude leer el archivo.'));
+  r.readAsDataURL(blob);
+});
+
+// Las fotos se achican en el celular (máx. 2000 px) para que suban rápido.
+async function fileToPart(f) {
+  if (f.type === 'application/pdf') {
+    if (f.size > 10e6) throw new Error(`${f.name} pesa más de 10 MB. Prueba con un PDF más liviano o con fotos.`);
+    return { type: f.type, data: await toBase64(f) };
+  }
+  if (!f.type.startsWith('image/')) throw new Error(`${f.name}: usa un PDF o fotos (JPG o PNG).`);
+  let bmp;
+  try { bmp = await createImageBitmap(f); } catch { throw new Error(`No pude abrir ${f.name}. Prueba con una foto JPG o PNG.`); }
+  const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85));
+  return { type: 'image/jpeg', data: await toBase64(blob) };
+}
+
+function draftFromImport(res) {
+  const profile = db().profile;
+  const d = {
+    id: uid(), name: res.name, source: 'propia', createdAt: new Date().toISOString(), rationale: res.notes || '', nextDay: 0,
+    days: res.days.map((day) => ({ id: uid(), name: day.name, focus: '', exercises: day.exercises.map((e) => {
+      const def = exerciseDefaults(profile, e.kind);
+      return { name: e.name, muscle: e.muscle, sec: e.sec || [], kind: e.kind, ...def, sets: e.sets, repMin: e.repMin, repMax: e.repMax, rir: e.rir ?? def.rir, restSec: e.restSec ?? def.restSec, notes: e.notes || '' };
+    }) })),
+    _new: true,
+    _imported: { notes: res.notes || '', unmatched: res.days.flatMap((x) => x.exercises.filter((e) => !e.matched).map((e) => e.name)) },
+  };
+  withProgram(d, 'doble');
+  return d;
+}
+
+async function runImport(files) {
+  if (!files.length) return;
+  if (files.length > 10) return alert('Máximo 10 archivos a la vez.');
+  openModal(`<p class="eyebrow">Importando</p><h2>Leyendo tu rutina…</h2><p class="muted">Puede tardar hasta un minuto. No cierres la app.</p><div class="spinner" aria-hidden="true"></div>`, false);
+  try {
+    const res = await cloud.importRoutine({ files: await Promise.all(files.map(fileToPart)) });
+    if (!res?.ok) throw new Error(res?.problem || 'No pude leer la rutina.');
+    draft = draftFromImport(res);
+    keepDraft();
+    closeModal();
+    if (location.hash.startsWith('#editar')) viewEditar(); else go('editar');
+    window.scrollTo(0, 0);
+  } catch (err) {
+    openModal(`<h2>No se pudo importar</h2><p>${esc(err.message || 'Algo salió mal.')}</p><div class="actions"><button class="btn primary" data-act="importRoutine">Probar con otro archivo</button></div>`);
+  }
 }
 
 // El borrador se guarda en el celular mientras lo editas: si sales o recargas, no se pierde.
@@ -511,9 +572,13 @@ function viewEditar() {
   const custom = (e) => !exerciseByName(e.name);
   main.innerHTML = `
   <header class="top"><div><h1>${draft._new ? 'Tu rutina' : 'Editar rutina'}</h1><p class="muted small">Tus días y ejercicios. La app sugiere los pesos.</p></div><button class="btn ghost sm" data-act="cancelEdit">Cancelar</button></header>
+  ${draft._imported ? `<section class="card"><div class="rec info"><b>Rutina importada</b>
+    <p class="small">Revisa que los ejercicios, las series y las repeticiones estén bien antes de guardar.${draft._imported.unmatched.length ? ` Estos no están en la biblioteca de la app: ${esc(draft._imported.unmatched.join(', '))}. Revisa su músculo en "Más opciones".` : ''}</p>
+    ${draft._imported.notes ? `<p class="small muted">${esc(draft._imported.notes)}</p>` : ''}</div></section>` : ''}
   <label>Nombre<input data-draft="name" value="${esc(draft.name)}" maxlength="60"></label>
-  <label>Cómo progresar<select data-draft="mode">${Object.entries(MODE_LABEL).map(([k, l]) => `<option value="${k}" ${draft.program?.repMode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-  <p class="muted small">${MODE_HELP[draft.program?.repMode] || ''}</p>
+  <fieldset class="modes"><legend>Cómo progresar</legend>
+    ${Object.entries(MODE_LABEL).map(([k, l]) => `<label class="mode ${draft.program?.repMode === k ? 'on' : ''}"><input type="radio" name="mode" value="${k}" data-draft="mode" ${draft.program?.repMode === k ? 'checked' : ''}><span><b>${l}</b><span class="muted small">${MODE_HELP[k]}</span></span></label>`).join('')}
+  </fieldset>
   ${draft.days.map((d, i) => `
   <section class="card dayedit">
     <div class="exhead"><input class="title-in" data-draft="day.name" data-day="${i}" value="${esc(d.name)}" aria-label="Nombre del día" maxlength="30">
@@ -523,6 +588,7 @@ function viewEditar() {
     <div class="edex">
       <div class="edtop"><b>${esc(e.name)}</b>
         <span><button class="icon sm" data-act="moveEx" data-day="${i}" data-ex="${j}" data-dir="-1" aria-label="Subir">↑</button><button class="icon sm" data-act="moveEx" data-day="${i}" data-ex="${j}" data-dir="1" aria-label="Bajar">↓</button><button class="icon sm" data-act="delEx" data-day="${i}" data-ex="${j}" aria-label="Quitar">✕</button></span></div>
+      ${e.notes ? `<p class="muted small">ℹ ${esc(e.notes)}</p>` : ''}
       <div class="exnums">
         <div class="stepper"><span class="slabel">Series</span><button class="icon sm" data-act="exSets" data-day="${i}" data-ex="${j}" data-d="-1" aria-label="Menos series">−</button><b>${e.sets}</b><button class="icon sm" data-act="exSets" data-day="${i}" data-ex="${j}" data-d="1" aria-label="Más series">+</button></div>
         <div class="reps"><span class="slabel">Reps</span><input type="number" inputmode="numeric" data-draft="ex.repMin" data-day="${i}" data-ex="${j}" value="${e.repMin}" aria-label="Reps mínimas"><span>–</span><input type="number" inputmode="numeric" data-draft="ex.repMax" data-day="${i}" data-ex="${j}" value="${e.repMax}" aria-label="Reps máximas"></div>
@@ -548,9 +614,9 @@ function viewEditar() {
 }
 
 const MODE_HELP = {
-  doble: 'Trabajas en tu rango de repeticiones con el mismo peso; cuando completas el tope en todas las series, la app te sube el peso.',
-  fases: 'Plan de 12 semanas en 3 bloques con descargas: la app cambia repeticiones y peso cada semana.',
-  fijo: 'Plan de 12 semanas con tus rangos de repeticiones y descargas cada 4 semanas.',
+  doble: 'Mismo peso hasta que completes el tope del rango en todas las series; ahí subes el peso y vuelves al mínimo de reps. Ej.: 3×8–12 con 60 kg → al lograr 12, 12 y 12, pasas a 62,5 kg y arrancas en 8.',
+  fases: 'La app te cambia las repeticiones y el peso cada semana: 3 bloques de 4 semanas, de más reps a más peso, con una semana de descarga al final de cada bloque.',
+  fijo: 'Mantienes tus rangos de repeticiones y la app te sube el peso poco a poco durante 12 semanas, con una semana de descarga cada 4.',
 };
 
 function newDraft() {
@@ -758,7 +824,7 @@ function viewPerfil() {
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
-  <p class="muted small center">${APP_NAME} v0.7${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center">${APP_NAME} v0.8${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -858,11 +924,19 @@ Object.assign(actions, {
     if (!msg) { err.textContent = 'Escribe tu comentario antes de enviar.'; err.hidden = false; return; }
     el.disabled = true; el.textContent = 'Enviando…';
     try {
-      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.7' });
+      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.8' });
       closeModal(); toast('¡Gracias! Comentario enviado');
     } catch (ex) { err.textContent = ex.message; err.hidden = false; el.disabled = false; el.textContent = 'Enviar'; }
   },
   startOwn: () => newDraft(),
+  importRoutine: () => {
+    if (!cloud.enabled || !cloud.user) return alert('Inicia sesión para importar tu rutina.');
+    closeModal();
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'application/pdf,image/*'; inp.multiple = true;
+    inp.addEventListener('change', () => runImport([...inp.files]));
+    inp.click();
+  },
   startScience: () => { generateSciencePlan(); update((st) => (st.coach.newPlanTip = true)); go('hoy'); },
   editActive: () => { update((st) => (st.coach.newPlanTip = false)); draft = clone(activePlan()); go('editar'); },
   exSets: (el) => { const e = draft.days[+el.dataset.day].exercises[+el.dataset.ex]; e.sets = Math.max(1, Math.min(8, (Number(e.sets) || 3) + Number(el.dataset.d))); const y = scrollY; viewEditar(); window.scrollTo(0, y); },
@@ -926,7 +1000,7 @@ Object.assign(actions, {
   saveDraft: () => {
     if (!draft.days.length) return alert('Agrega al menos un día.');
     if (draft.days.some((d) => !d.exercises.length)) return alert('Cada día necesita al menos un ejercicio (o bórralo).');
-    const isNew = draft._new; delete draft._new;
+    const isNew = draft._new; delete draft._new; delete draft._imported;
     draft.days.forEach((d) => { d.focus = [...new Set(d.exercises.map((e) => MUSCLES[e.muscle]))].slice(0, 4).join(', '); d.exercises.forEach((e) => { if (Number(e.repMin) > Number(e.repMax)) [e.repMin, e.repMax] = [e.repMax, e.repMin]; }); });
     const saved = draft;
     update((st) => { const i = st.plans.findIndex((p) => p.id === saved.id); if (i >= 0) st.plans[i] = saved; else st.plans.push(saved); if (isNew || !st.activePlanId) st.activePlanId = saved.id; st.coach.newPlanTip = false; });

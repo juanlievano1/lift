@@ -416,3 +416,13 @@ details.more { margin-top: 6px; }
 details.more summary { font-size: 13px; color: var(--muted); cursor: pointer; }
 .review .rec { margin-top: 10px; }
 .review .eyebrow { margin-bottom: 2px; }
+
+/* Cómo progresar: las tres opciones con su explicación */
+.modes { border: 0; padding: 0; margin: 12px 0 14px; }
+.modes legend { font-size: 13px; color: var(--ink-2); font-weight: 600; margin-bottom: 6px; padding: 0; }
+.modes .mode { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-weight: 400; cursor: pointer; }
+.modes .mode.on { border-color: var(--accent); background: var(--accent-soft); }
+.modes .mode input { width: 18px; height: 18px; min-height: 0; padding: 0; margin: 3px 0 0; border: 0; background: none; box-shadow: none; accent-color: var(--accent); flex: none; }
+.modes .mode > span { flex: 1; min-width: 0; }
+.modes .mode b { display: block; color: var(--ink); font-size: 15px; margin-bottom: 2px; }
+.modes .mode .muted { display: block; line-height: 1.4; }
