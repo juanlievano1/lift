@@ -139,9 +139,10 @@ async function viewFriend(username) {
 
 async function share() {
   const link = cloud.inviteLink();
-  const text = `Entrena conmigo en ${APP_NAME}: planes de 12 semanas con base científica y coach con IA. Agrégame: @${cloud.me?.username}`;
+  const text = `Entrena conmigo en ${APP_NAME}: arma tu rutina, la app te dice cuánto peso poner y vemos el progreso del otro. Entra con este enlace y quedamos como amigos:`;
   try {
-    if (navigator.share) { await navigator.share({ title: APP_NAME, text, url: link }); return; }
+    // El enlace va dentro del texto: algunas apps (WhatsApp en iPhone) descartan el campo url.
+    if (navigator.share) { await navigator.share({ title: APP_NAME, text: `${text}\n${link}` }); return; }
   } catch (e) { if (e.name === 'AbortError') return; }
   try { await navigator.clipboard.writeText(`${text}\n${link}`); toast('Enlace copiado: pégalo en WhatsApp'); }
   catch { prompt('Copia tu enlace de invitación:', link); }

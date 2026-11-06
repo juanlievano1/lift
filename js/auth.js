@@ -4,14 +4,37 @@ import * as cloud from './cloud.js';
 import { APP_NAME, APP_TAGLINE } from './config.js';
 import { $, esc, toast, actions, rerender } from './ui.js';
 
-// Enlace de invitación: ?invite=usuario (se guarda hasta que la persona entra).
-const inv = new URLSearchParams(location.search).get('invite');
-if (inv) {
-  sessionStorage.setItem('forja.invite', inv.toLowerCase());
-  const url = new URL(location.href); url.searchParams.delete('invite');
-  history.replaceState(null, '', url.pathname + url.search + url.hash);
+// Enlace de invitación: ?i=código (nuevo, te hace amigo al instante) o ?invite=usuario (antiguo, envía solicitud).
+// Se guarda en el celular hasta que se resuelve (ver cloud.saveInvite).
+{
+  const qs = new URLSearchParams(location.search);
+  const code = qs.get('i'), uname = qs.get('invite');
+  if (code && /^[A-Za-z0-9]{6,40}$/.test(code)) cloud.saveInvite({ code });
+  else if (uname && /^[A-Za-z0-9_]{3,20}$/.test(uname)) cloud.saveInvite({ username: uname.toLowerCase() });
+  if (code || uname) {
+    const url = new URL(location.href); url.searchParams.delete('i'); url.searchParams.delete('invite');
+    history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }
+  // Invitaciones abiertas con la versión anterior (solo duraban en la pestaña).
+  try { const old = sessionStorage.getItem('forja.invite'); if (old && !cloud.pendingInvite()) cloud.saveInvite({ username: old }); sessionStorage.removeItem('forja.invite'); } catch {}
 }
-const pendingInvite = () => sessionStorage.getItem('forja.invite');
+
+// Texto de la invitación en la bienvenida: el nombre de quien invita se consulta con el código.
+function inviteBanner() {
+  const inv = cloud.pendingInvite();
+  if (!inv) return '';
+  const who = inv.name ? `<b>${esc(inv.name)}</b>` : inv.username ? `<b>@${esc(inv.username)}</b>` : 'Un amigo';
+  if (inv.code && !inv.name && !inviteBanner.asked) {
+    inviteBanner.asked = true;
+    cloud.inviteOwner(inv.code).then((o) => {
+      if (!o) return;
+      cloud.saveInvite({ ...inv, name: o.display_name || `@${o.username}` });
+      const el = document.querySelector('.invite');
+      if (el) el.outerHTML = inviteBanner();
+    }).catch(() => {});
+  }
+  return `<p class="invite">💪 ${who} te invitó a entrenar en ${APP_NAME}</p>`;
+}
 
 let mode = 'welcome'; // welcome | signup | login | reset | confirm | username
 
@@ -22,13 +45,12 @@ let busy = false;
 
 export function viewAuth() {
   const main = $('#main');
-  const invite = pendingInvite();
   const head = `<section class="hero"><div class="logo">${APP_NAME}</div>`;
   if (cloud.needsUsername()) return viewUsername(head);
   if (mode === 'welcome') {
     main.innerHTML = `${head}
       <h1>${APP_TAGLINE.replace('. ', '.<br>')}</h1>
-      ${invite ? `<p class="invite">💪 <b>@${esc(invite)}</b> te invitó a entrenar en ${APP_NAME}</p>` : ''}
+      ${inviteBanner()}
     </section>
     <ul class="features">
       <li><b>Tu rutina, revisada</b><span>Arma la tuya o créala al instante. La app revisa que esté balanceada.</span></li>
@@ -162,19 +184,34 @@ async function enter() {
   rerender();
 }
 
-// Tras entrar: si llegó con invitación, envía la solicitud de amistad automáticamente.
+// Tras entrar (o al abrir el enlace con la sesión ya iniciada): resuelve la invitación pendiente.
+// Con código: quedan como amigos al instante. Con @usuario (enlaces antiguos): se envía la solicitud.
+// Si falla por conexión, la invitación se conserva y se reintenta la próxima vez que abras la app.
+let consuming = false;
 export async function consumeInvite() {
-  const u = pendingInvite();
-  if (!u || !cloud.user) return;
-  sessionStorage.removeItem('forja.invite');
-  if (u === cloud.me?.username) return;
+  const inv = cloud.pendingInvite();
+  if (!inv || !cloud.user || consuming) return;
+  consuming = true;
   try {
-    const other = await cloud.findUser(u);
-    if (!other) return;
-    await cloud.requestFriend(other.id);
-    toast(`Solicitud de amistad enviada a @${u}`);
+    if (inv.code) {
+      const who = await cloud.acceptInvite(inv.code);
+      cloud.clearInvite();
+      if (who) { toast(`¡Listo! Ya eres amigo de @${who}`); rerender(); }
+    } else if (inv.username === cloud.me?.username) {
+      cloud.clearInvite();
+    } else {
+      const other = await cloud.findUser(inv.username);
+      if (other) {
+        try { await cloud.requestFriend(other.id); toast(`Solicitud de amistad enviada a @${inv.username}`); }
+        catch (e) { if (!/ya hay una solicitud/i.test(e.message)) throw e; }
+      }
+      cloud.clearInvite();
+    }
   } catch (e) {
-    if (!/ya hay una solicitud/i.test(e.message)) console.warn(e);
+    console.warn(e);
+    toast('No se pudo aceptar la invitación. Lo intentaremos de nuevo al abrir la app.');
+  } finally {
+    consuming = false;
   }
 }
 

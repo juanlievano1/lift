@@ -8,6 +8,7 @@ const SKEY = 'forja.mocksession';
 const wait = (ms = 500) => new Promise((r) => setTimeout(r, ms));
 const id = () => crypto.randomUUID();
 const ago = (h) => new Date(Date.now() - h * 3600e3).toISOString();
+const codeOf = (u) => (u ? u.id.replace(/-/g, '').slice(0, 12) : null);
 
 function seed() {
   const sofia = { id: id(), email: 'sofia@ejemplo.com', password: 'x', username: 'sofia', display_name: 'Sofía Rojas' };
@@ -100,6 +101,17 @@ export function mockBackend() {
       d.friendships.push({ requester: me, addressee: to, status: 'pending', created_at: new Date().toISOString() }); store(d);
     },
     async accept(from) { const f = d.friendships.find((x) => x.requester === from && x.addressee === meId()); if (f) f.status = 'accepted'; store(d); },
+    // Invitaciones con código (en la prueba, el código sale del id del usuario).
+    async inviteCode() { return codeOf(current()); },
+    async inviteOwner(code) { const u = d.users.find((x) => codeOf(x) === code); return u ? { username: u.username, display_name: u.display_name } : null; },
+    async acceptInvite(code) {
+      const me = meId(), u = d.users.find((x) => codeOf(x) === code);
+      if (!u || u.id === me) return null;
+      const f = d.friendships.find((x) => (x.requester === me && x.addressee === u.id) || (x.requester === u.id && x.addressee === me));
+      if (f) f.status = 'accepted'; else d.friendships.push({ requester: u.id, addressee: me, status: 'accepted', created_at: new Date().toISOString() });
+      store(d);
+      return u.username;
+    },
     async remove(other) { const me = meId(); d.friendships = d.friendships.filter((f) => !((f.requester === me && f.addressee === other) || (f.requester === other && f.addressee === me))); store(d); },
     async feed(userId) {
       await wait(200);

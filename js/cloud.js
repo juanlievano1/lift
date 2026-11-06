@@ -27,14 +27,14 @@ async function supabaseBackend() {
   return {
     async session() { const { data } = await sb.auth.getSession(); return data.session?.user || null; },
     async signUp({ email, password, username, displayName }) {
-      const data = must(await sb.auth.signUp({ email, password, options: { data: { username: username.toLowerCase(), display_name: displayName }, emailRedirectTo: location.origin + location.pathname } }));
+      const data = must(await sb.auth.signUp({ email, password, options: { data: { username: username.toLowerCase(), display_name: displayName }, emailRedirectTo: returnUrl() } }));
       return { user: data.user, needsConfirm: !data.session };
     },
     async signIn({ email, password }) { return must(await sb.auth.signInWithPassword({ email, password })).user; },
     // Google: redirige a la pantalla de Google y vuelve a la app con la sesión iniciada.
-    async signInWithGoogle() { must(await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname, queryParams: { prompt: 'select_account' } } })); return null; },
+    async signInWithGoogle() { must(await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: returnUrl(), queryParams: { prompt: 'select_account' } } })); return null; },
     async signOut() { await sb.auth.signOut(); },
-    async resetPassword(email) { must(await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname })); },
+    async resetPassword(email) { must(await sb.auth.resetPasswordForEmail(email, { redirectTo: returnUrl() })); },
     async usernameAvailable(u) { return must(await sb.rpc('username_available', { p_username: u })); },
     async profile(id) { return must(await sb.from('profiles').select('id, username, display_name, username_confirmed').eq('id', id).single()); },
     async confirmUsername(id, username, display_name) { must(await sb.from('profiles').update({ username: username.toLowerCase(), display_name, username_confirmed: true }).eq('id', id)); },
@@ -48,6 +48,9 @@ async function supabaseBackend() {
     async byUsername(u) { return must(await sb.from('profiles').select('id, username, display_name').eq('username', u.toLowerCase()).maybeSingle()); },
     async request(to) { must(await sb.from('friendships').insert({ requester: await uidNow(), addressee: to })); },
     async accept(from) { must(await sb.from('friendships').update({ status: 'accepted' }).eq('requester', from).eq('addressee', await uidNow())); },
+    async inviteCode() { return must(await sb.rpc('my_invite_code')); },
+    async inviteOwner(code) { return must(await sb.rpc('invite_owner', { p_code: code }))?.[0] || null; },
+    async acceptInvite(code) { return must(await sb.rpc('accept_invite', { p_code: code })); },
     async remove(other) { const me = await uidNow(); must(await sb.from('friendships').delete().or(`and(requester.eq.${me},addressee.eq.${other}),and(requester.eq.${other},addressee.eq.${me})`)); },
     async feed(userId) {
       let q = sb.from('activity').select('id, user_id, kind, payload, created_at, author:profiles(id, username, display_name), cheers(user_id)').order('created_at', { ascending: false }).limit(40);
@@ -114,6 +117,7 @@ export async function init() {
 async function setUser(u) {
   user = { id: u.id, email: u.email };
   try { me = await api.profile(u.id); } catch { me = { id: u.id, username: '', display_name: '', username_confirmed: true }; }
+  try { me.invite_code = await api.inviteCode(); } catch { /* sin código: el enlace usa el @usuario */ }
 }
 
 export async function signUp(f) { const r = await api.signUp(f); if (!r.needsConfirm && r.user) await setUser(r.user); return r; }
@@ -237,4 +241,23 @@ export async function importRoutine(payload) {
 }
 export async function usage() { try { return { ...(await api.usage(user.id)), ...(lastUsage ? { limitCents: lastUsage.limitCents } : {}) }; } catch { return null; } }
 
-export const inviteLink = () => `${location.origin}${location.pathname}?invite=${encodeURIComponent(me?.username || '')}`;
+export const inviteLink = () => `${location.origin}${location.pathname}${me?.invite_code ? `?i=${me.invite_code}` : `?invite=${encodeURIComponent(me?.username || '')}`}`;
+
+// ---------- Invitación pendiente ----------
+// Se guarda en el celular (no solo en la pestaña) hasta 14 días, para que sobreviva a la vuelta de Google,
+// a confirmar el correo en otra pestaña o a cerrar la app. Se borra solo cuando se resuelve.
+const INV_KEY = 'lift.invite';
+export function saveInvite(inv) { try { localStorage.setItem(INV_KEY, JSON.stringify({ ...inv, at: Date.now() })); } catch {} }
+export function pendingInvite() {
+  try {
+    const v = JSON.parse(localStorage.getItem(INV_KEY) || 'null');
+    if (v && Date.now() - v.at < 14 * 864e5 && (v.code || v.username)) return v;
+    localStorage.removeItem(INV_KEY);
+  } catch {}
+  return null;
+}
+export function clearInvite() { try { localStorage.removeItem(INV_KEY); } catch {} }
+// A dónde vuelve la app tras Google o el correo (la URL autorizada en Supabase; la invitación ya quedó guardada).
+function returnUrl() { return location.origin + location.pathname; }
+export const inviteOwner = (code) => api.inviteOwner(code);
+export const acceptInvite = (code) => api.acceptInvite(code);
