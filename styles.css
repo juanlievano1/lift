@@ -465,3 +465,88 @@ button.chip { border: 1px solid var(--line); cursor: pointer; text-transform: no
   --band: rgba(211, 220, 255, 0.7);
 }
 :root[data-theme="mixto"] .card.accent { background: linear-gradient(165deg, #e3e9ff, var(--surface) 55%); border-color: #c5d0f5; }
+
+/* ================= Conceptos de prueba (solo para quien los elija en su celular) ================= */
+/* Ajustes comunes: los tintes fijos del tema naranja pasan a usar el color de cada concepto. */
+:root[data-theme="volt"] .card.accent, :root[data-theme="electrico"] .card.accent { background: linear-gradient(165deg, var(--accent-soft), var(--surface) 55%); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+:root[data-theme="volt"] .hint, :root[data-theme="electrico"] .hint, :root[data-theme="carrera"] .hint { background: var(--accent-soft); }
+:root[data-theme="volt"] .newplan, :root[data-theme="volt"] .proposal, :root[data-theme="volt"] .cheer.on,
+:root[data-theme="electrico"] .newplan, :root[data-theme="electrico"] .proposal, :root[data-theme="electrico"] .cheer.on,
+:root[data-theme="carrera"] .newplan, :root[data-theme="carrera"] .proposal, :root[data-theme="carrera"] .cheer.on { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+:root[data-theme="volt"] .avatar, :root[data-theme="electrico"] .avatar, :root[data-theme="carrera"] .avatar { color: var(--accent-ink); }
+
+/* 1) VOLT: oscuro de gimnasio, verde lima neón, títulos en itálica. */
+:root[data-theme="volt"] {
+  --bg: #0c0d0f;
+  --surface: #16181c;
+  --surface-2: #1f2227;
+  --line: #2a2e35;
+  --ink: #f3f4f6;
+  --ink-2: #c7cad1;
+  --muted: #8a8f99;
+  --accent: #c6ff3d;
+  --accent-strong: #d4ff6e;
+  --accent-ink: #0c0d0f;
+  --accent-soft: rgba(198, 255, 61, 0.1);
+  --good: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --series-0: #c6ff3d;
+  --series-1: #f3f4f6;
+  --band: rgba(198, 255, 61, 0.14);
+  --radius: 14px;
+  color-scheme: dark;
+}
+:root[data-theme="volt"] h1, :root[data-theme="volt"] h2 { font-style: italic; }
+:root[data-theme="volt"] .card { box-shadow: none; }
+:root[data-theme="volt"] .modal { background: rgba(0, 0, 0, 0.65); }
+:root[data-theme="volt"] .msg.user .bubble { color: var(--bg); }
+:root[data-theme="volt"] .prs, :root[data-theme="volt"] .demo-note { background: rgba(251, 191, 36, 0.12); color: #fbbf24; }
+
+/* 2) ELÉCTRICO: blanco limpio, azul cobalto, tipografía ancha (Archivo) y esquinas más rectas. */
+:root[data-theme="electrico"] {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --line: #e1e4ea;
+  --ink: #0b0d12;
+  --ink-2: #3b4252;
+  --muted: #6b7280;
+  --accent: #2b59ff;
+  --accent-strong: #1d3fd6;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(43, 89, 255, 0.08);
+  --series-0: #2b59ff;
+  --series-1: #0b0d12;
+  --band: rgba(43, 89, 255, 0.1);
+  --radius: 10px;
+  --font-display: "Archivo", "Arial", system-ui, sans-serif;
+}
+:root[data-theme="electrico"] h1 { letter-spacing: -0.02em; font-weight: 900; }
+:root[data-theme="electrico"] .card { box-shadow: 0 1px 3px rgba(11, 13, 18, 0.05); }
+:root[data-theme="electrico"] .modal { background: rgba(11, 13, 18, 0.45); }
+
+/* 3) CARRERA: gris claro, rojo de competencia, esquinas rectas y la tarjeta principal en negro. */
+:root[data-theme="carrera"] {
+  --bg: #efefef;
+  --surface: #ffffff;
+  --surface-2: #f2f2f2;
+  --line: #dedede;
+  --ink: #0a0a0a;
+  --ink-2: #3a3a3a;
+  --muted: #707070;
+  --accent: #e10600;
+  --accent-strong: #b80500;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(225, 6, 0, 0.07);
+  --series-0: #e10600;
+  --series-1: #0a0a0a;
+  --band: rgba(225, 6, 0, 0.09);
+  --radius: 4px;
+}
+:root[data-theme="carrera"] h1, :root[data-theme="carrera"] h2 { font-style: italic; }
+:root[data-theme="carrera"] .card { box-shadow: none; }
+:root[data-theme="carrera"] .card.accent { background: #0a0a0a; border-color: #0a0a0a; color: #fff; --ink: #ffffff; --ink-2: #d4d4d4; --muted: #a3a3a3; --line: #2a2a2a; --surface-2: #1a1a1a; --accent-strong: #ff4b45; }
+:root[data-theme="carrera"] .modal { background: rgba(10, 10, 10, 0.5); }
+:root[data-theme="carrera"] .btn, :root[data-theme="carrera"] input, :root[data-theme="carrera"] select, :root[data-theme="carrera"] textarea, :root[data-theme="carrera"] .hint, :root[data-theme="carrera"] .rec { border-radius: 3px; }
+:root[data-theme="electrico"] .btn { border-radius: 8px; }
