@@ -171,17 +171,47 @@ const DAYS = {
   PULL: { name: 'Tracción', focus: 'Espalda, deltoide posterior y bíceps', slots: [['traccion_v', 0], ['traccion_h', 0], ['traccion_v', 1], ['biceps', 0], ['biceps', 1], ['hombro_post', 0], ['abdomen', 0]] },
   PUSH2: { name: 'Empuje B', focus: 'Pecho, hombros y tríceps', slots: [['empuje_h', 1], ['empuje_v', 1], ['pecho_iso', 1], ['hombro_lat', 1], ['triceps', 1], ['triceps', 2], ['empuje_h', 2]] },
   PULL2: { name: 'Tracción B', focus: 'Espalda, deltoide posterior y bíceps', slots: [['traccion_h', 1], ['traccion_v', 1], ['traccion_h', 2], ['biceps', 1], ['biceps', 2], ['hombro_post', 1], ['abdomen', 1]] },
+  FB_D: { name: 'Full Body D', focus: 'Cuerpo completo', slots: [['bisagra', 1], ['empuje_v', 1], ['traccion_h', 1], ['cuad_iso', 1], ['biceps', 1], ['triceps', 1], ['hombro_post', 1], ['abdomen', 0]] },
+  // Rutinas por grupos musculares (la clásica de gimnasio).
+  CHEST: { name: 'Pecho y tríceps', focus: 'Pecho y tríceps', slots: [['empuje_h', 0], ['empuje_h', 1], ['pecho_iso', 0], ['empuje_h', 2], ['triceps', 0], ['triceps', 1]] },
+  BACK: { name: 'Espalda y bíceps', focus: 'Espalda y bíceps', slots: [['traccion_v', 0], ['traccion_h', 0], ['traccion_h', 1], ['traccion_v', 1], ['biceps', 0], ['biceps', 1]] },
+  SHOULDERS: { name: 'Hombros y brazos', focus: 'Hombros, bíceps y tríceps', slots: [['empuje_v', 0], ['hombro_lat', 0], ['hombro_post', 0], ['hombro_lat', 1], ['biceps', 2], ['triceps', 2], ['abdomen', 0]] },
+  ARMS: { name: 'Brazos y hombros', focus: 'Bíceps, tríceps y hombros', slots: [['biceps', 0], ['triceps', 0], ['hombro_lat', 0], ['biceps', 1], ['triceps', 1], ['hombro_post', 1], ['abdomen', 1]] },
 };
 
 // Si no hay ejercicio para un patrón con el equipo disponible, se usa otro patrón cercano.
 const FALLBACK = { traccion_v: 'traccion_h', pecho_iso: 'empuje_h', hombro_post: 'traccion_h' };
 
-const SPLITS = {
-  2: { name: 'Full Body 2 días', days: ['FB_A', 'FB_B'] },
-  3: { name: 'Full Body 3 días', days: ['FB_A', 'FB_B', 'FB_C'] },
-  4: { name: 'Torso / Pierna 4 días', days: ['UA', 'LA', 'UB', 'LB'] },
-  5: { name: 'Torso / Pierna + Empuje / Tracción 5 días', days: ['UA', 'LA', 'PUSH', 'PULL', 'LB'] },
-  6: { name: 'Empuje / Tracción / Pierna 6 días', days: ['PUSH', 'PULL', 'LA', 'PUSH2', 'PULL2', 'LB'] },
+// Distribuciones posibles por número de días. La primera es la que la app usa por defecto.
+// "why" es el comentario que ve la persona al elegir.
+export const SPLIT_OPTIONS = {
+  2: [
+    { key: 'fb2', name: 'Cuerpo completo', days: ['FB_A', 'FB_B'], why: 'Con 2 días es lo más eficiente: cada músculo se entrena 2 veces por semana.' },
+    { key: 'ul2', name: 'Torso / Pierna', days: ['UA', 'LA'], why: 'Un día para el torso y otro para las piernas. Sesiones más enfocadas, pero cada músculo solo 1 vez por semana, lo que suele dar algo menos de resultado.' },
+  ],
+  3: [
+    { key: 'fb3', name: 'Cuerpo completo', days: ['FB_A', 'FB_B', 'FB_C'], why: 'Cada músculo 3 veces por semana con sesiones variadas. Muy buena si empiezas o si quieres progresar parejo.' },
+    { key: 'ulf3', name: 'Torso / Pierna / Cuerpo completo', days: ['UA', 'LA', 'FB_C'], why: 'Dos sesiones enfocadas y una de cuerpo completo: cada músculo unas 2 veces por semana.' },
+    { key: 'ppl3', name: 'Empuje / Tracción / Pierna', days: ['PUSH', 'PULL', 'LA'], why: 'Un día por tipo de movimiento. Más volumen por sesión, pero cada músculo 1 vez por semana.' },
+  ],
+  4: [
+    { key: 'ul4', name: 'Torso / Pierna', days: ['UA', 'LA', 'UB', 'LB'], why: 'La más equilibrada con 4 días: cada músculo 2 veces por semana y sesiones de duración pareja.' },
+    { key: 'fb4', name: 'Cuerpo completo', days: ['FB_A', 'FB_B', 'FB_C', 'FB_D'], why: 'Cada músculo 3 a 4 veces por semana con pocas series por sesión: menos fatiga por día y mucha práctica de los básicos.' },
+    { key: 'bro4', name: 'Por grupos musculares', days: ['CHEST', 'BACK', 'LA', 'SHOULDERS'], why: 'Pecho y tríceps, espalda y bíceps, pierna, y hombros con brazos. Sesiones muy enfocadas; cada músculo grande 1 vez por semana.' },
+  ],
+  5: [
+    { key: 'mix5', name: 'Torso / Pierna + Empuje / Tracción', days: ['UA', 'LA', 'PUSH', 'PULL', 'LB'], why: 'Cada músculo unas 2 veces por semana, con un día extra de empuje y otro de tracción.' },
+    { key: 'ula5', name: 'Torso / Pierna + Brazos', days: ['UA', 'LA', 'UB', 'LB', 'ARMS'], why: 'Torso y pierna 2 veces cada uno, más un día de brazos y hombros. Buena si quieres priorizar los brazos.' },
+    { key: 'bro5', name: 'Por grupos musculares', days: ['CHEST', 'BACK', 'LA', 'SHOULDERS', 'LB'], why: 'La clásica de gimnasio: un grupo por día. Más series por sesión; los músculos del torso 1 vez por semana y las piernas 2.' },
+  ],
+  6: [
+    { key: 'ppl6', name: 'Empuje / Tracción / Pierna x2', days: ['PUSH', 'PULL', 'LA', 'PUSH2', 'PULL2', 'LB'], why: 'Cada músculo 2 veces por semana con sesiones cortas y enfocadas. Pide constancia: son 6 días.' },
+    { key: 'bro6', name: 'Por grupos musculares', days: ['CHEST', 'BACK', 'LA', 'SHOULDERS', 'ARMS', 'LB'], why: 'Un grupo por día, con brazos aparte: mucho trabajo por músculo en cada sesión, cada uno cerca de 1 vez por semana.' },
+  ],
+};
+const splitFor = (days, key) => {
+  const opts = SPLIT_OPTIONS[days];
+  return opts.find((o) => o.key === key) || opts[0];
 };
 
 // Esquema de series/reps/RIR/descanso por objetivo (compuesto vs aislamiento).
@@ -219,9 +249,10 @@ function pick(pattern, variant, profile, used) {
 
 const prioritized = (profile) => new Set((profile.priorities || []).flatMap((k) => PRIORITIES[k]?.muscles || []));
 
-export function generatePlan(profile) {
+// splitKey (opcional): una de SPLIT_OPTIONS[días]; sin ella, la distribución por defecto.
+export function generatePlan(profile, splitKey) {
   const days = Math.max(2, Math.min(6, Number(profile.days) || 3));
-  const split = SPLITS[days];
+  const split = splitFor(days, splitKey);
   const range = timeRangeOf(profile);
   const maxMin = TIME_RANGES[range][1];
   const prio = prioritized(profile);
@@ -246,7 +277,8 @@ export function generatePlan(profile) {
   });
   const plan = {
     id: uid(),
-    name: `${split.name} · ${GOAL_SHORT[profile.goal] || ''}`.replace(/ · $/, ''),
+    name: `${split.name} ${days} días · ${GOAL_SHORT[profile.goal] || ''}`.replace(/ · $/, ''),
+    split: split.key,
     source: 'ciencia',
     createdAt: new Date().toISOString(),
     rationale: '',
@@ -263,15 +295,13 @@ export function generatePlan(profile) {
       cand.sets -= 1;
     }
   }
-  plan.rationale = rationaleFor(profile, days, range, left);
+  plan.rationale = rationaleFor(profile, days, range, left, split);
   return plan;
 }
 
-function rationaleFor(p, days, range, left = []) {
+function rationaleFor(p, days, range, left = [], split = null) {
   const lines = [];
-  lines.push(days <= 3
-    ? `Con ${days} días, cuerpo completo permite entrenar cada músculo 2–3 veces por semana.`
-    : `Con ${days} días, la división reparte el trabajo para entrenar cada músculo unas 2 veces por semana.`);
+  lines.push(split ? `${split.name} en ${days} días: ${split.why.charAt(0).toLowerCase()}${split.why.slice(1)}` : `Con ${days} días, la división reparte el trabajo para entrenar cada músculo unas 2 veces por semana.`);
   const goalLine = {
     hipertrofia: 'Para ganar músculo: series de 6–15 repeticiones cerca del fallo, con 10–20 series por músculo a la semana.',
     fuerza: 'Para ganar fuerza: los básicos en 4–6 repeticiones con descansos largos; los accesorios sostienen el músculo que luego empuja la fuerza.',
@@ -384,8 +414,11 @@ export function lastPerformance(sessions, name) {
   return null;
 }
 
-// Progresión doble: devuelve la sugerencia para hoy basada en la última sesión.
-export function suggestion(sessions, target, name) {
+// Progresión doble para entrenos libres (sin rutina): la sugerencia de hoy según la última sesión.
+// Los pesos se guardan en kg; unit es la unidad en que se muestran y se suben ('kg' o 'lb').
+export function suggestion(sessions, target, name, unit = 'kg') {
+  const LB = 0.45359237;
+  const show = (kg) => `${String(unit === 'lb' ? Math.round((kg / LB) * 2) / 2 : Math.round(kg * 100) / 100).replace('.', ',')} ${unit}`;
   const last = lastPerformance(sessions, name);
   if (!last) return { kg: '', text: `Primera vez: elige un peso que te deje ${target.rir} repeticiones en reserva al hacer ${target.repMax}.` };
   const done = last.ex.sets.filter((s) => s.done && s.kg !== '' && s.reps !== '');
@@ -394,13 +427,15 @@ export function suggestion(sessions, target, name) {
   const atTop = done.filter((s) => Number(s.kg) === topKg);
   const allMax = atTop.length >= target.sets && atTop.every((s) => Number(s.reps) >= target.repMax);
   const ex = exerciseByName(name);
-  const inc = ex && ex.kind === 'c' && ex.equip === 'barra' ? 2.5 : ex && ex.equip === 'peso_corporal' ? 0 : ex?.kind === 'c' ? 2 : 1;
+  const incKg = ex && ex.kind === 'c' && ex.equip === 'barra' ? 2.5 : ex && ex.equip === 'peso_corporal' ? 0 : ex?.kind === 'c' ? 2 : 1;
+  const inc = incKg && unit === 'lb' ? 5 * LB : incKg;
   if (allMax) {
     if (!inc) return { kg: topKg, text: `Completaste el rango. Hazlo más difícil (más lento, pausa o lastre) y vuelve a ${target.repMin} reps.` };
-    return { kg: +(topKg + inc).toFixed(2), text: `¡Subes peso! ${topKg} → ${+(topKg + inc).toFixed(2)} kg, vuelve a ${target.repMin} reps.` };
+    const next = Math.round((topKg + inc) * 1000) / 1000;
+    return { kg: next, text: `¡Subes peso! ${show(topKg)} → ${show(next)}, vuelve a ${target.repMin} reps.` };
   }
   const best = Math.max(...atTop.map((s) => Number(s.reps)));
-  return { kg: topKg, text: `Mantén ${topKg} kg y busca +1 rep (última vez máx. ${best}).` };
+  return { kg: topKg, text: `Mantén ${show(topKg)} y busca +1 rep (última vez máx. ${best}).` };
 }
 
 export const PRINCIPLES = [

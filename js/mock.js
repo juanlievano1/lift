@@ -139,6 +139,14 @@ export function mockBackend() {
 
 function mockCoach(action, p) {
   if (action === 'import') return mockImport(p);
+  if (action === 'adjust') {
+    // Prueba: agrega un curl al primer día que tenga torso, sin entender el pedido.
+    const days = (p.plan?.days || []).map((d) => ({ name: d.name, focus: d.focus || '', exercises: d.exercises.map((e) => ({ ...e })) }));
+    const d = days.find((x) => x.exercises.some((e) => ['pecho', 'espalda', 'hombros'].includes(e.muscle))) || days[0];
+    if (d && !d.exercises.some((e) => e.name === 'Curl con mancuernas')) d.exercises.push({ name: 'Curl con mancuernas', muscle: 'biceps', sec: [], kind: 'i', sets: 3, repMin: 10, repMax: 15, rir: 1, restSec: 75, notes: '' });
+    const rationale = `(Versión de prueba: en la app real se aplica lo que pidas.) Agregué Curl con mancuernas en ${d?.name || 'tu rutina'}.`;
+    return { plan: { name: p.plan?.name || 'Mi rutina', rationale, days }, message: rationale };
+  }
   const name = p.profile?.name || 'crack';
   if (action === 'interview') {
     // Simulación: parte del plan actual y aplica pedidos sencillos (en la versión real lo hace Claude).

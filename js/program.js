@@ -131,13 +131,32 @@ export function plannedMetric(plan, sessions, ex, w) {
 }
 
 // Redondea al incremento real del equipo y respeta el mínimo físico (la barra sola ya pesa 20 kg).
-const fmtKg = (n) => String(n).replace('.', ',');
+// ---------- Unidades: todo se guarda en kg; se muestra y se redondea en la unidad de cada ejercicio ----------
+export const LB = 0.45359237;
+export const unitOf = (profile, name) => profile?.exUnits?.[name] || profile?.unit || 'kg';
+// kg → número en la unidad (libras a 0,5; kilos a 0,01).
+export function inUnit(kg, unit = 'kg') {
+  const n = Number(kg);
+  if (!Number.isFinite(n)) return '';
+  return unit === 'lb' ? Math.round((n / LB) * 2) / 2 : Math.round(n * 100) / 100;
+}
+export const fromUnit = (v, unit = 'kg') => (unit === 'lb' ? Math.round(Number(v) * LB * 1000) / 1000 : Number(v));
+export const numStr = (v) => String(v).replace('.', ',');
+export const fmtW = (kg, unit = 'kg') => `${numStr(inUnit(kg, unit))} ${unit}`;
 
-function roundLoad(kg, ex) {
+const LIGHT_BAR = ['curl_barra', 'frances', 'curl_predicador'];
+// Redondea al incremento real del equipo y respeta el mínimo físico (la barra sola: 20 kg o 45 lb).
+function roundLoad(kg, ex, unit = 'kg') {
   const lib = exerciseByName(ex.name);
   const eq = lib?.equip;
+  if (unit === 'lb') {
+    // En libras: discos de 2,5 lb por lado y mancuernas/placas de 5 en 5.
+    const step = eq === 'barra' || eq === 'maquina' || eq === 'polea' || eq === 'mancuernas' ? 5 : 1;
+    const min = eq === 'barra' ? (LIGHT_BAR.includes(lib.id) ? 20 : 45) : eq === 'maquina' ? 10 : eq === 'polea' || eq === 'mancuernas' ? 5 : step;
+    return fromUnit(Math.max(min, Math.round(kg / LB / step) * step), 'lb');
+  }
   const step = eq === 'barra' || eq === 'maquina' || eq === 'polea' ? 2.5 : eq === 'mancuernas' ? 2 : 1;
-  const min = eq === 'barra' ? (['curl_barra', 'frances', 'curl_predicador'].includes(lib.id) ? 10 : 20) : eq === 'maquina' ? 5 : eq === 'polea' ? 2.5 : eq === 'mancuernas' ? 2 : step;
+  const min = eq === 'barra' ? (LIGHT_BAR.includes(lib.id) ? 10 : 20) : eq === 'maquina' ? 5 : eq === 'polea' ? 2.5 : eq === 'mancuernas' ? 2 : step;
   return Math.max(min, Math.round(kg / step) * step);
 }
 
@@ -159,13 +178,14 @@ export function prescribe(plan, sessions, ex, w, profile = null) {
   const restSec = kind === 'c' ? (repMax <= 6 ? 210 : 150) : 75;
   const targetReps = Math.round((repMin + repMax) / 2);
   const bw = isBodyweight(ex);
+  const unit = unitOf(profile, ex.name);
   const pm = plannedMetric(plan, sessions, ex, info.week);
   let kg = null, text;
   if (pm == null) {
     const est = !bw && estimateStart1RM(profile, ex.name);
     if (est) {
-      kg = roundLoad(est / (1 + (targetReps + rir) / 30), ex);
-      text = `Peso sugerido para empezar: ${fmtKg(kg)} kg${perHand(ex.name) ? ' por mancuerna' : ''} × ${targetReps} reps (estimado con tu peso y nivel). Si te sobran más de ${rir} reps o no llegas, ajústalo: esta sesión calibra tu plan.`;
+      kg = roundLoad(est / (1 + (targetReps + rir) / 30), ex, unit);
+      text = `Peso sugerido para empezar: ${fmtW(kg, unit)}${perHand(ex.name) ? ' por mancuerna' : ''} × ${targetReps} reps (estimado con tu peso y nivel). Si te sobran más de ${rir} reps o no llegas, ajústalo: esta sesión calibra tu plan.`;
     } else if (bw) {
       text = `Primera vez: haz ${targetReps} reps por serie dejando ${rir} en reserva. Si no llegas, haz la versión más fácil; si te sobran muchas, ponle más dificultad.`;
     } else {
@@ -177,8 +197,8 @@ export function prescribe(plan, sessions, ex, w, profile = null) {
       ? `Objetivo ${reps} reps: supera el rango, añade dificultad (lastre, pausa o tempo lento).`
       : `Objetivo: ${Math.max(reps, 1)} reps por serie dejando ${rir} en reserva.`;
   } else {
-    kg = roundLoad(pm / (1 + (targetReps + rir) / 30), ex);
-    text = `Objetivo: ${fmtKg(kg)} kg${perHand(ex.name) ? ' por mancuerna' : ''} × ${targetReps} reps, RIR ${rir}${info.deload ? ' (descarga: más ligero, recupera)' : ''}.`;
+    kg = roundLoad(pm / (1 + (targetReps + rir) / 30), ex, unit);
+    text = `Objetivo: ${fmtW(kg, unit)}${perHand(ex.name) ? ' por mancuerna' : ''} × ${targetReps} reps, RIR ${rir}${info.deload ? ' (descarga: más ligero, recupera)' : ''}.`;
   }
   return { sets, repMin, repMax, rir, restSec, targetReps, kg, text, deload: info.deload };
 }
@@ -197,10 +217,11 @@ function lastLog(sessions, name) {
   return null;
 }
 
-function loadStep(ex) {
+// Salto de peso en kg (en libras: 5 lb, que es lo mínimo que sube un gimnasio en libras).
+function loadStep(ex, unit = 'kg') {
   const lib = exerciseByName(ex.name);
   const eq = lib?.equip;
-  const base = eq === 'mancuernas' ? 2 : eq === 'barra' || eq === 'maquina' || eq === 'polea' ? 2.5 : 1;
+  const base = unit === 'lb' ? (eq ? 5 * LB : LB) : eq === 'mancuernas' ? 2 : eq === 'barra' || eq === 'maquina' || eq === 'polea' ? 2.5 : 1;
   // En piernas con barra o máquina se progresa más rápido.
   return LOWER_BODY.has(ex.muscle || lib?.muscle) && (eq === 'barra' || eq === 'maquina') && (lib?.kind || ex.kind) === 'c' ? base * 2 : base;
 }
@@ -214,6 +235,8 @@ export function prescribeDouble(plan, sessions, ex, profile = null) {
   const restSec = Number(ex.restSec) || (kind === 'c' ? 150 : 75);
   const bw = isBodyweight(ex);
   const hand = perHand(ex.name) ? ' por mancuerna' : '';
+  const unit = unitOf(profile, ex.name);
+  const W = (kg) => fmtW(kg, unit);
   const base = { sets, repMin, repMax, rir, restSec, deload: false };
   const last = lastLog(sessions, ex.name);
 
@@ -221,8 +244,8 @@ export function prescribeDouble(plan, sessions, ex, profile = null) {
     const target = Math.min(repMax, repMin + 1);
     const est = !bw && estimateStart1RM(profile, ex.name);
     if (est) {
-      const kg = roundLoad(est / (1 + (target + rir) / 30), ex);
-      return { ...base, targetReps: target, kg, text: `Peso sugerido para empezar: ${fmtKg(kg)} kg${hand} × ${target} reps (estimado con tu peso y nivel). Si te sobran más de ${rir} reps o no llegas, ajústalo: así la app aprende tu nivel.` };
+      const kg = roundLoad(est / (1 + (target + rir) / 30), ex, unit);
+      return { ...base, targetReps: target, kg, text: `Peso sugerido para empezar: ${W(kg)}${hand} × ${target} reps (estimado con tu peso y nivel). Si te sobran más de ${rir} reps o no llegas, ajústalo: así la app aprende tu nivel.` };
     }
     return { ...base, targetReps: target, kg: null, text: bw ? `Primera vez: haz ${target}–${repMax} reps por serie dejando ${rir} en reserva.` : `Primera vez: elige un peso con el que hagas ${target} reps dejando ${rir} en reserva.` };
   }
@@ -241,16 +264,16 @@ export function prescribeDouble(plan, sessions, ex, profile = null) {
   }
   if (completed) {
     // Si además te sobraron muchas reps en reserva, el salto es doble.
-    const jump = loadStep(ex) * (avgRir >= rir + 2 ? 2 : 1);
-    const kg = roundLoad(top + jump, ex);
-    return { ...base, targetReps: repMin, kg, text: `¡Subes peso! Completaste ${repMax} reps en todas las series: ${fmtKg(top)} → ${fmtKg(kg)} kg${hand}. Vuelve a ${repMin} reps y sube desde ahí.` };
+    const jump = loadStep(ex, unit) * (avgRir >= rir + 2 ? 2 : 1);
+    const kg = roundLoad(top + jump, ex, unit);
+    return { ...base, targetReps: repMin, kg, text: `¡Subes peso! Completaste ${repMax} reps en todas las series: ${numStr(inUnit(top, unit))} → ${W(kg)}${hand}. Vuelve a ${repMin} reps y sube desde ahí.` };
   }
   if (minReps < repMin - 1) {
-    const kg = roundLoad(top * 0.9, ex);
-    return { ...base, targetReps: repMin, kg, text: `La vez pasada te quedaste corto (${reps.join(', ')} reps). Baja a ${fmtKg(kg)} kg${hand} y busca ${repMin} reps con buena técnica.` };
+    const kg = roundLoad(top * 0.9, ex, unit);
+    return { ...base, targetReps: repMin, kg, text: `La vez pasada te quedaste corto (${reps.join(', ')} reps). Baja a ${W(kg)}${hand} y busca ${repMin} reps con buena técnica.` };
   }
   const target = Math.min(repMax, Math.max(repMin, minReps + 1));
-  return { ...base, targetReps: target, kg: top, text: `Mantén ${fmtKg(top)} kg${hand} y busca ${target} reps en cada serie (la vez pasada: ${reps.join(', ')}). Al llegar a ${repMax} en todas, subes peso.` };
+  return { ...base, targetReps: target, kg: top, text: `Mantén ${W(top)}${hand} y busca ${target} reps en cada serie (la vez pasada: ${reps.join(', ')}). Al llegar a ${repMax} en todas, subes peso.` };
 }
 
 // Series de plan vs real para un ejercicio (para graficar).

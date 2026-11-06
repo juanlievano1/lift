@@ -72,7 +72,7 @@ async function supabaseBackend() {
     async coach(action, payload) {
       const { data, error } = await sb.functions.invoke('coach', { body: { action, payload } });
       if (error) {
-        let msg = action === 'import' ? 'No se pudo leer tu rutina. Revisa tu conexión e inténtalo de nuevo.' : 'No se pudo hablar con el coach. Revisa tu conexión.';
+        let msg = action === 'import' ? 'No se pudo leer tu rutina. Revisa tu conexión e inténtalo de nuevo.' : action === 'adjust' ? 'No se pudo ajustar la rutina. Revisa tu conexión e inténtalo de nuevo.' : 'No se pudo hablar con el coach. Revisa tu conexión.';
         try { const body = await error.context?.json?.(); if (body?.error) msg = body.error; } catch {}
         throw new Error(msg);
       }
@@ -232,6 +232,13 @@ export async function coach(action, payload) {
   return res;
 }
 export let lastUsage = null;
+
+// Ajustar una rutina con un pedido en palabras (lo aplica Claude en el servidor).
+export async function adjustPlan(payload) {
+  if (!enabled || !user) throw new Error('Inicia sesión para pedir cambios.');
+  if (!navigator.onLine) throw new Error('Necesitas conexión a internet para pedir cambios.');
+  return api.coach('adjust', payload);
+}
 
 // Importar una rutina desde un PDF, fotos o texto (la lee Claude en el servidor).
 export async function importRoutine(payload) {

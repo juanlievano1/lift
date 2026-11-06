@@ -2,7 +2,7 @@
 
 import { db, today } from './db.js';
 import { weightRateTarget } from './science.js';
-import { newProgram, weekOf, review } from './program.js';
+import { newProgram, weekOf, review, fmtW } from './program.js';
 import { n1 } from './ui.js';
 import { COACH_ENABLED } from './config.js';
 
@@ -15,7 +15,7 @@ export function withProgram(plan, repMode) {
   return plan;
 }
 
-export const rxLabel = (rx) => (rx.kg ? `${rx.sets}×${rx.targetReps} · ${rx.kg.toLocaleString('es')} kg` : `${rx.sets}×${rx.repMin}–${rx.repMax}`);
+export const rxLabel = (rx, unit = 'kg') => (rx.kg ? `${rx.sets}×${rx.targetReps} · ${fmtW(rx.kg, unit)}` : `${rx.sets}×${rx.repMin}–${rx.repMax}`);
 
 export const currentWeek = (plan) => weekOf(plan, today());
 
