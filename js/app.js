@@ -7,7 +7,7 @@ import { $, esc, fmtDate, n1, clone, toast, openModal, closeModal, modalOpen, ac
 import { MODE_LABEL, SOURCE, withProgram, rxLabel, currentWeek, weekStart, weightStats, weightText, planRecs } from './domain.js';
 import * as cloud from './cloud.js';
 import * as lock from './lockscreen.js';
-import { APP_NAME, COACH_ENABLED, ADJUST_ENABLED, THEME_TESTERS } from './config.js';
+import { APP_NAME, COACH_ENABLED, ADJUST_ENABLED } from './config.js';
 import { viewAuth, consumeInvite } from './auth.js';
 import { viewAmigos, publishSession } from './social.js';
 import { viewCoach, viewCrear, runPostSession, maybeWeeklyReview, coachBanner } from './coachui.js';
@@ -1032,8 +1032,6 @@ function viewPerfil() {
     <h3>Tus datos</h3>
     <p class="muted small">${acc ? 'Se guardan en este celular y se sincronizan con tu cuenta.' : 'Todo se guarda en este celular. Exporta un respaldo de vez en cuando.'}</p>
     <label class="switch"><input type="checkbox" data-setting="restSound" ${s.settings.restSound ? 'checked' : ''}> Sonido al terminar el descanso</label>
-    ${THEME_TESTERS.includes(cloud.me?.username) ? (() => { let t = 'brasa'; try { t = localStorage.getItem('lift.tema') || 'brasa'; } catch {} return `<p class="eyebrow" style="margin-top:12px">Color de la app (prueba, solo en este celular)</p>
-    <div class="daychips">${[['brasa', 'Actual'], ['volt', 'Volt'], ['electrico', 'Eléctrico'], ['carrera', 'Carrera']].map(([k, l]) => `<button class="chip ${t === k ? 'on' : ''}" data-act="setTheme" data-t="${k}" style="font-size:14px">${l}</button>`).join('')}</div>`; })() : ''}
     ${lock.supported ? `<label class="switch"><input type="checkbox" data-setting="lockScreen" ${s.settings.lockScreen !== false ? 'checked' : ''}> Ver el descanso en la pantalla de bloqueo</label>` : ''}
     ${lock.canNotify() && Notification.permission !== 'granted' ? `<button class="link" data-act="enableNotify">🔔 Avisarme con una notificación al terminar el descanso</button>` : ''}
     <div class="actions wrap">
@@ -1191,14 +1189,6 @@ Object.assign(actions, {
     } catch (ex) { err.textContent = ex.message; err.hidden = false; el.disabled = false; el.textContent = 'Enviar'; }
   },
   startOwn: () => newDraft(),
-  // Color de prueba: se guarda solo en este celular.
-  setTheme: (el) => {
-    const t = el.dataset.t;
-    try { if (t === 'brasa') localStorage.removeItem('lift.tema'); else localStorage.setItem('lift.tema', t); } catch {}
-    if (t === 'brasa') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
-    const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = { volt: '#0c0d0f', electrico: '#f4f5f7', carrera: '#efefef' }[t] || '#f6f2ec';
-    render();
-  },
   importRoutine: () => {
     if (!cloud.enabled || !cloud.user) return alert('Inicia sesión para importar tu rutina.');
     closeModal();

@@ -18,5 +18,3 @@ export const COACH_ENABLED = false;
 // "¿No te gusta algo? Pídenos cambios": ajusta la rutina con IA (acción "adjust" de la función coach).
 // Se enciende cuando la función con esa acción está desplegada en Supabase.
 export const ADJUST_ENABLED = true;
-// Quiénes ven en Perfil el selector de color de prueba (el color se guarda solo en su celular).
-export const THEME_TESTERS = ['juanlievano1'];
