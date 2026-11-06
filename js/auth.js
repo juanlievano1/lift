@@ -31,8 +31,8 @@ export function viewAuth() {
       ${invite ? `<p class="invite">💪 <b>@${esc(invite)}</b> te invitó a entrenar en ${APP_NAME}</p>` : ''}
     </section>
     <ul class="features">
-      <li><b>Plan de 12 semanas</b><span>Con base científica: te dice qué peso levantar cada semana.</span></li>
-      <li><b>Coach con IA</b><span>Crea tu plan conversando, comenta tus entrenos y revisa tu semana.</span></li>
+      <li><b>Tu rutina, revisada</b><span>Arma la tuya o créala al instante. La app revisa que esté balanceada.</span></li>
+      <li><b>Pesos sugeridos</b><span>Te dice cuánto peso poner y cuándo subirlo.</span></li>
       <li><b>Amigos</b><span>Mira sus entrenos y récords, y dales fuerzas.</span></li>
     </ul>
     ${googleBtn()}
