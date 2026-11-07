@@ -1,5 +1,5 @@
 import { db, update, uid, today, activePlan, exportJSON, importJSON, parseBackup, resetAll, requestPersistence } from './db.js';
-import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, PRIORITIES, exerciseDefaults, TIME_RANGES, timeRangeOf, timeLabel, estimateMinutes, generatePlan, SPLIT_OPTIONS, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName, MARK_LIFTS } from './science.js';
+import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, PRIORITIES, barMinKg, exerciseDefaults, TIME_RANGES, timeRangeOf, timeLabel, estimateMinutes, generatePlan, SPLIT_OPTIONS, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName, MARK_LIFTS } from './science.js';
 import { lineChart, volumeBars } from './charts.js';
 import { reviewRoutine, applyFix } from './routine.js';
 import { WEEKS, newProgram, ensureProgram, weekInfo, prescribe, unitOf, inUnit, fromUnit, numStr, fmtW, roundLoad, exerciseTrack, exerciseStatus, uniqueExercises, applyRec, dismissRec, blocksFor, planReport, applyReviewChanges } from './program.js';
@@ -63,6 +63,12 @@ function addProfileButton(route) {
 window.addEventListener('hashchange', render);
 
 // Números escritos con coma o punto ("57,5" o "57.5"). Vacío o inválido → null.
+// RIR: "2", "1,5" o un rango "1-2" (se guarda el punto medio, 1,5). Entre 0 y 10.
+const parseRir = (v) => {
+  const m = String(v ?? '').trim().replace(/,/g, '.').match(/^(\d+(?:\.\d+)?)\s*[-–a]\s*(\d+(?:\.\d+)?)$/);
+  const n = m ? (Number(m[1]) + Number(m[2])) / 2 : parseNum(v);
+  return n == null ? null : Math.min(10, Math.max(0, n));
+};
 const parseNum = (v) => { const t = String(v ?? '').trim().replace(',', '.'); if (!t) return null; const n = Number(t); return Number.isFinite(n) ? n : null; };
 // Unidad en que se muestran y se escriben los pesos de un ejercicio (kg o lb).
 const unitFor = (name) => unitOf(db().profile, name);
@@ -286,7 +292,7 @@ function sessionExercise(e, plan, wk, sessions) {
   if (plan && wk) {
     const rx = prescribe(plan, sessions, e, wk, db().profile);
     return {
-      name: e.name, muscle: e.muscle, sec: e.sec, kind: e.kind, notes: e.notes,
+      name: e.name, muscle: e.muscle, sec: e.sec, kind: e.kind, notes: e.notes, superset: !!e.superset,
       target: { sets: rx.sets, repMin: rx.repMin, repMax: rx.repMax, rir: rx.rir, restSec: rx.restSec, kg: rx.kg, reps: rx.targetReps },
       hint: rx.text,
       sets: Array.from({ length: rx.sets }, () => ({ kg: rx.kg ?? lastKg(sessions, e.name), reps: '', rir: '', done: false })),
@@ -294,7 +300,7 @@ function sessionExercise(e, plan, wk, sessions) {
   }
   const sug = suggestion(sessions, e, e.name, unitFor(e.name));
   return {
-    name: e.name, muscle: e.muscle, sec: e.sec, kind: e.kind, notes: e.notes,
+    name: e.name, muscle: e.muscle, sec: e.sec, kind: e.kind, notes: e.notes, superset: !!e.superset,
     target: { sets: e.sets, repMin: e.repMin, repMax: e.repMax, rir: e.rir, restSec: e.restSec },
     hint: sug.text,
     sets: Array.from({ length: e.sets }, () => ({ kg: sug.kg ?? '', reps: '', rir: '', done: false })),
@@ -355,8 +361,27 @@ function firstWorkoutTips(s) {
   </section>`;
 }
 
+// Discos por lado para llegar a un peso con barra (el resto, si no cuadra exacto, se marca con ≈).
+const PLATES = { kg: [25, 20, 15, 10, 5, 2.5, 1.25], lb: [45, 35, 25, 10, 5, 2.5] };
+function platesText(e, u) {
+  const lib = exerciseByName(e.name);
+  if (lib?.equip !== 'barra') return '';
+  const work = e.sets.find((x) => !x.done && !x.warm && Number(x.kg) > 0) || e.sets.find((x) => !x.warm && Number(x.kg) > 0);
+  if (!work) return '';
+  const bar = inUnit(barMinKg(lib), u);
+  let side = (inUnit(Number(work.kg), u) - bar) / 2;
+  if (side <= 0) return `Solo la barra (${numStr(bar)} ${u})`;
+  const out = [];
+  for (const p of PLATES[u]) while (side >= p - 1e-9) { out.push(p); side -= p; }
+  return `Discos por lado: ${out.map(numStr).join(' + ')}${side > 0.01 ? ' (≈)' : ''} · barra de ${numStr(bar)} ${u}`;
+}
+
 function exerciseCard(e, i, s) {
   const last = lastPerformance(s.sessions, e.name);
+  const exs = s.activeSession?.exercises || [];
+  const pairNext = e.superset && exs[i + 1] ? exs[i + 1] : null;
+  const pairPrev = exs[i - 1]?.superset ? exs[i - 1] : null;
+  const warmCount = e.sets.filter((x) => x.warm).length;
   const u = unitFor(e.name);
   const w = (kg) => (kg === '' || kg == null ? '' : numStr(inUnit(kg, u)));
   const lastTxt = last ? `${last.ex.sets.filter((x) => x.done).map((x) => `${w(x.kg)}×${x.reps}`).join(', ')} (${u})` : '';
@@ -370,18 +395,20 @@ function exerciseCard(e, i, s) {
     ${e.hint ? `<p class="hint">↗ ${esc(e.hint)}</p>` : ''}
     ${lastTxt ? `<p class="muted small">Última vez (${fmtDate(last.date)}): ${esc(lastTxt)}</p>` : ''}
     ${e.notes ? `<p class="muted small">ℹ ${esc(e.notes)}</p>` : ''}
+    ${pairNext ? `<p class="small superset">🔗 Superserie con <b>${esc(pairNext.name)}</b>: haz una serie de cada uno y descansa después del segundo.</p>` : pairPrev ? `<p class="small superset">🔗 Superserie con <b>${esc(pairPrev.name)}</b></p>` : ''}
+    <p class="muted small plates" data-plates="${i}">${platesText(e, u)}</p>
     <div class="sets">
       <div class="sethead"><span>#</span><button class="unitbtn" data-act="exUnit" data-ex="${i}" aria-label="Cambiar unidad de ${esc(e.name)}">${u} ⇄</button><span>reps</span><span>RIR</span><span></span></div>
       ${e.sets.map((st, j) => `
-      <div class="set ${st.done ? 'done' : ''}">
-        <span class="num">${j + 1}</span>
+      <div class="set ${st.done ? 'done' : ''} ${st.warm ? 'warm' : ''}">
+        <span class="num" ${st.warm ? 'title="Serie de calentamiento"' : ''}>${st.warm ? 'C' : j - warmCount + 1}</span>
         <input type="text" inputmode="decimal" value="${w(st.kg)}" data-bind="kg" data-ex="${i}" data-set="${j}" aria-label="Peso en ${u === 'lb' ? 'libras' : 'kilos'}, serie ${j + 1}">
-        <input type="number" inputmode="numeric" value="${esc(st.reps)}" placeholder="${e.target.reps ?? `${e.target.repMin}–${e.target.repMax}`}" data-bind="reps" data-ex="${i}" data-set="${j}" aria-label="Repeticiones serie ${j + 1}">
-        <input type="number" inputmode="numeric" value="${esc(st.rir)}" placeholder="${e.target.rir}" data-bind="rir" data-ex="${i}" data-set="${j}" aria-label="RIR serie ${j + 1}">
+        <input type="number" inputmode="numeric" value="${esc(st.reps)}" placeholder="${st.warm ? 8 : e.target.reps ?? `${e.target.repMin}–${e.target.repMax}`}" data-bind="reps" data-ex="${i}" data-set="${j}" aria-label="Repeticiones serie ${j + 1}">
+        ${st.warm ? '<span class="muted small center">—</span>' : `<input type="text" inputmode="decimal" value="${st.rir === '' || st.rir == null ? '' : esc(numStr(st.rir))}" placeholder="${e.target.rir}" data-bind="rir" data-ex="${i}" data-set="${j}" aria-label="RIR serie ${j + 1} (acepta 1,5 o 1-2)">`}
         <button class="check" data-act="toggleSet" data-ex="${i}" data-set="${j}" aria-pressed="${!!st.done}" aria-label="Serie ${j + 1} hecha">✓</button>
       </div>`).join('')}
     </div>
-    <div class="exfoot"><button class="link" data-act="addSet" data-ex="${i}">+ Serie</button>${e.sets.length > 1 ? `<button class="link" data-act="delSet" data-ex="${i}">− Serie</button>` : ''}<button class="link swap" data-act="swapEx" data-ex="${i}">⇄ Cambiar ejercicio</button></div>
+    <div class="exfoot"><button class="link" data-act="addSet" data-ex="${i}">+ Serie</button><button class="link" data-act="addWarm" data-ex="${i}">+ Calentamiento</button>${e.sets.length > 1 ? `<button class="link" data-act="delSet" data-ex="${i}">− Serie</button>` : ''}<button class="link swap" data-act="swapEx" data-ex="${i}">⇄ Cambiar ejercicio</button></div>
   </section>`;
 }
 
@@ -483,9 +510,9 @@ function tickElapsed() {
 function finishSession() {
   const s = db();
   const a = s.activeSession;
-  const exs = a.exercises.map((e) => ({ ...e, sets: e.sets.filter((x) => x.done) })).filter((e) => e.sets.length);
+  const exs = a.exercises.map((e) => ({ ...e, sets: e.sets.filter((x) => x.done && !x.warm) })).filter((e) => e.sets.length);
   if (!exs.length) { if (!confirm('No marcaste ninguna serie. ¿Descartar el entreno?')) return; update((st) => (st.activeSession = null)); stopRest(); lock.stop(); return go('hoy'); }
-  const pending = a.exercises.reduce((n, e) => n + e.sets.filter((x) => !x.done).length, 0);
+  const pending = a.exercises.reduce((n, e) => n + e.sets.filter((x) => !x.done && !x.warm).length, 0);
   if (pending && !confirm(`Te ${pending === 1 ? 'falta 1 serie' : `faltan ${pending} series`} sin marcar. ¿Terminar el entreno igual? (Las que no marcaste no se guardan.)`)) return;
   // Récords personales (por e1RM estimado)
   const prs = [];
@@ -914,6 +941,7 @@ function viewEditar() {
           <label>Descanso (s)<input type="number" inputmode="numeric" data-draft="ex.restSec" data-day="${i}" data-ex="${j}" value="${e.restSec}"></label>
           ${custom(e) ? `<label>Músculo<select data-draft="ex.muscle" data-day="${i}" data-ex="${j}">${muscleOpts(e.muscle)}</select></label>` : ''}
         </div>
+        ${j < d.exercises.length - 1 ? `<label class="switch"><input type="checkbox" data-draft="ex.superset" data-day="${i}" data-ex="${j}" ${e.superset ? 'checked' : ''}> Superserie con el siguiente (${esc(d.exercises[j + 1].name)})</label>` : ''}
         <p class="muted small">RIR: repeticiones que te quedan en reserva al terminar la serie (0 = al fallo).</p>
       </details>
     </div>`).join('')}
@@ -1148,7 +1176,7 @@ function viewPerfil() {
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
-  <p class="muted small center">${APP_NAME} v0.13${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center">${APP_NAME} v0.14${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -1211,12 +1239,17 @@ Object.assign(actions, {
       const e = st.activeSession.exercises[i];
       const set = e.sets[j];
       set.done = !set.done;
-      if (set.done) {
+      if (set.done && set.warm) {
+        // Calentamiento: no cuenta para el progreso ni arranca el descanso largo.
+        if (set.reps === '') set.reps = 8;
+      } else if (set.done) {
         if (set.reps === '') set.reps = e.target.reps ?? e.target.repMax;
         if (set.rir === '') set.rir = e.target.rir;
         // propaga el peso a las series siguientes vacías
         for (let k = j + 1; k < e.sets.length; k++) if (e.sets[k].kg === '' && !e.sets[k].done) e.sets[k].kg = set.kg;
-        rest = e.target.restSec;
+        // Superserie: después del primero se pasa directo al segundo; el descanso va después del segundo.
+        const pair = e.superset ? st.activeSession.exercises[i + 1] : null;
+        rest = pair && pair.sets.some((z) => !z.done && !z.warm) ? 0 : e.target.restSec;
         // Qué viene: la siguiente serie de este ejercicio o el siguiente ejercicio.
         const nextSet = e.sets.findIndex((x, k) => k > j && !x.done);
         const nextEx = st.activeSession.exercises.slice(i + 1).find((x) => x.sets.some((z) => !z.done));
@@ -1228,9 +1261,21 @@ Object.assign(actions, {
     if (rest) startRest(rest, ctx);
     viewEntreno();
   },
-  addSet: (el) => { update((st) => { const e = st.activeSession.exercises[+el.dataset.ex]; const l = e.sets[e.sets.length - 1]; e.sets.push({ kg: l?.kg ?? '', reps: '', rir: '', done: false }); }); viewEntreno(); },
+  addSet: (el) => { update((st) => { const e = st.activeSession.exercises[+el.dataset.ex]; const l = [...e.sets].reverse().find((x) => !x.warm); e.sets.push({ kg: l?.kg ?? '', reps: '', rir: '', done: false }); }); viewEntreno(); },
+  // Serie de calentamiento antes de las de trabajo (≈ mitad del peso). No se guarda en el historial.
+  addWarm: (el) => {
+    update((st) => {
+      const e = st.activeSession.exercises[+el.dataset.ex];
+      const work = e.sets.find((x) => !x.warm && Number(x.kg) > 0);
+      const kg = work ? roundLoad(Number(work.kg) * 0.5, e, unitFor(e.name)) : '';
+      const at = e.sets.filter((x) => x.warm).length;
+      e.sets.splice(at, 0, { kg, reps: '', rir: '', done: false, warm: true });
+    });
+    viewEntreno();
+  },
   delSet: (el) => {
     const e0 = db().activeSession.exercises[+el.dataset.ex];
+    if (e0.sets.filter((x) => !x.warm).length <= 1 && !e0.sets[e0.sets.length - 1]?.warm) return;
     if (e0.sets[e0.sets.length - 1]?.done && !confirm('La última serie ya está marcada como hecha. ¿Quitarla igual?')) return;
     update((st) => { const e = st.activeSession.exercises[+el.dataset.ex]; if (e.sets.length > 1) e.sets.pop(); }); viewEntreno();
   },
@@ -1304,7 +1349,7 @@ Object.assign(actions, {
     if (!msg) { err.textContent = 'Escribe tu comentario antes de enviar.'; err.hidden = false; return; }
     el.disabled = true; el.textContent = 'Enviando…';
     try {
-      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.13' });
+      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.14' });
       closeModal(); toast('¡Gracias! Comentario enviado');
     } catch (ex) { err.textContent = ex.message; err.hidden = false; el.disabled = false; el.textContent = 'Enviar'; }
   },
@@ -1475,22 +1520,23 @@ document.addEventListener('change', (e) => {
     let copied = [];
     update((st) => {
       const ex = st.activeSession.exercises[i];
-      const n = parseNum(el.value);
+      const n = el.dataset.bind === 'rir' ? parseRir(el.value) : parseNum(el.value);
       const val = n == null ? '' : el.dataset.bind === 'kg' ? fromUnit(n, unitFor(ex.name)) : n;
       const old = ex.sets[j][el.dataset.bind];
       ex.sets[j][el.dataset.bind] = val;
       // Como en las apps de gimnasio: el nuevo peso pasa a las series siguientes que seguían con el anterior.
-      if (el.dataset.bind === 'kg' && val !== '') {
-        ex.sets.forEach((s, k) => { if (k > j && !s.done && (s.kg === old || s.kg === '')) { s.kg = val; copied.push(k); } });
+      if (el.dataset.bind === 'kg' && val !== '' && !ex.sets[j].warm) {
+        ex.sets.forEach((s, k) => { if (k > j && !s.done && !s.warm && (s.kg === old || s.kg === '')) { s.kg = val; copied.push(k); } });
       }
     });
+    if (el.dataset.bind === 'kg') { const pl = document.querySelector(`[data-plates="${i}"]`); const ex = db().activeSession.exercises[i]; if (pl) pl.textContent = platesText(ex, unitFor(ex.name)); }
     for (const k of copied) {
       const inp = document.querySelector(`input[data-bind="kg"][data-ex="${i}"][data-set="${k}"]`);
       if (inp) inp.value = el.value.trim();
     }
   } else if (el.dataset.draft && draft) {
     const [scope, field] = el.dataset.draft.split('.');
-    const val = el.type === 'number' ? Number(el.value) : el.value;
+    const val = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
     if (scope === 'name') draft.name = el.value;
     else if (scope === 'mode') draft.program = { ...newProgram(db().profile, draft.program.startDate, el.value), adjust: draft.program.adjust || {} };
     else if (scope === 'day') draft.days[+el.dataset.day][field] = val;

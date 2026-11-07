@@ -455,3 +455,10 @@ details.marks summary { cursor: pointer; font-weight: 600; color: var(--ink-2); 
 .exfoot .link { min-height: 44px; padding: 0 6px; }
 .exfoot { gap: 12px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
+
+/* Calentamiento, superseries y discos */
+.set.warm { opacity: 0.75; }
+.set.warm .num { color: var(--accent-strong); font-weight: 700; }
+.superset { background: var(--accent-soft); border-radius: 10px; padding: 6px 10px; margin: 6px 0; }
+.plates { margin: 2px 0 6px; }
+.plates:empty { display: none; }

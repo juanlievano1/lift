@@ -165,6 +165,7 @@ export function roundLoad(kg, ex, unit = 'kg') {
   return Math.max(min, Math.round(kg / step) * step);
 }
 
+const BASICS = new Set(['sentadilla', 'banca', 'inclinado_barra', 'militar', 'rumano', 'peso_muerto', 'hip_thrust', 'remo_barra']);
 const estSource = (profile) => (Object.values(profile?.marks || {}).some((v) => v > 0) ? 'calculado con tus marcas' : 'estimado con tu peso y nivel');
 // Si la barra sola pesa bastante más de lo calculado, se dice claro en vez de sugerir un peso que no toca.
 function barHint(ex, raw, kg, unit, reps) {
@@ -181,6 +182,8 @@ export function prescribe(plan, sessions, ex, w, profile = null) {
   const kind = ex.kind || exerciseByName(ex.name)?.kind || 'c';
   const lvl = plan.program.level;
   let [repMin, repMax] = plan.program.repMode === 'fijo' ? [ex.repMin, ex.repMax] : (BLOCKS[plan.program.goal] || BLOCKS.hipertrofia)[info.block - 1][kind];
+  // Muy pocas reps (bloques de fuerza) solo en los básicos: en zancadas, máquinas o poleas aportan poco y arriesgan más.
+  if (plan.program.repMode !== 'fijo' && kind === 'c' && repMin < 6 && !BASICS.has(exerciseByName(ex.name)?.id)) [repMin, repMax] = [6, 8];
   let rir, sets = Number(ex.sets) || 3;
   if (info.deload) { rir = 4; sets = Math.max(1, Math.ceil(sets / 2)); }
   else {
@@ -356,11 +359,16 @@ export function review(plan, sessions, { now, profile, weightRate }) {
     recs.push({ key: 'fin', level: 'info', title: 'Plan completado 🎉', text: 'Terminaste las 12 semanas. Revisa los resultados con IA para crear el siguiente plan ajustado a ti, o genera uno nuevo con ciencia. Tus marcas actuales serán el punto de partida.', action: 'aiReview', cta: 'Revisar con IA' });
   }
 
-  const ups = tracked.filter((s) => s.streak === 'arriba');
-  if (ups.length) recs.push({ key: 'up', level: 'good', title: `Vas por delante en ${ups.length} ejercicio${ups.length > 1 ? 's' : ''}`, text: `${ups.map((s) => s.ex.name).join(', ')}: llevas dos sesiones por encima del plan. Subo los objetivos para que sigan siendo un reto.`, action: 'recal', payload: ups.map((s) => s.ex.name), cta: 'Subir objetivos' });
+  // En progresión doble mantener el peso mientras suben las reps es lo normal: no se compara con una proyección.
+  const doble = p.repMode === 'doble';
+  if (doble && w >= 8 && w % 8 === 0) {
+    recs.push({ key: 'suave', level: 'info', title: `Llevas ${w} semanas seguidas`, text: 'Una semana suave cada 6–8 semanas ayuda a recuperarte: esta semana haz la mitad de las series con el mismo peso y deja 3–4 reps en reserva. La siguiente retomas donde ibas.' });
+  }
+  const ups = doble ? [] : tracked.filter((s) => s.streak === 'arriba');
+  if (ups.length) recs.push({ key: 'up', level: 'good', title: `Vas por delante en ${ups.length} ejercicio${ups.length > 1 ? 's' : ''}`, text: `${ups.map((s) => s.ex.name).join(', ')}: llevas dos sesiones por encima de lo previsto. La app sube los objetivos para que sigan siendo un reto.`, action: 'recal', payload: ups.map((s) => s.ex.name), cta: 'Subir objetivos' });
 
-  const downs = tracked.filter((s) => s.streak === 'abajo');
-  const fatigue = tracked.length >= 3 && tracked.filter((s) => s.status === 'abajo').length / tracked.length >= 0.5;
+  const downs = doble ? [] : tracked.filter((s) => s.streak === 'abajo');
+  const fatigue = !doble && tracked.length >= 3 && tracked.filter((s) => s.status === 'abajo').length / tracked.length >= 0.5;
   const nextDeload = p.deloads.find((d) => d >= info.week);
   if (fatigue && !info.deload && nextDeload && nextDeload - info.week >= 1) {
     recs.push({ key: 'deload', level: 'warn', title: 'Señales de fatiga acumulada', text: `La mitad o más de tus ejercicios están por debajo del plan. Lo más eficaz suele ser adelantar la descarga a esta semana (semana ${info.week}) y retomar con energía. Revisa también sueño y comida.`, action: 'deloadNow', cta: 'Adelantar descarga' });
@@ -451,7 +459,7 @@ export function applyReviewChanges(plan, changes) {
       day.exercises.push({
         name: lib?.name || c.exercise, muscle: lib?.muscle || c.muscle, sec: lib?.sec || [], kind,
         sets: Math.min(Math.max(c.sets || 3, 1), 6),
-        repMin: kind === 'c' ? 6 : 10, repMax: kind === 'c' ? 10 : 15, rir: kind === 'c' ? 2 : 1, restSec: kind === 'c' ? 150 : 75,
+        repMin: kind === 'c' ? 6 : 10, repMax: kind === 'c' ? 10 : 15, rir: plan.program?.goal === 'salud' ? 2 : kind === 'c' ? 2 : 1, restSec: kind === 'c' ? 150 : 75,
         notes: c.reason,
       });
       ok = true;

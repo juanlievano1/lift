@@ -35,8 +35,16 @@ export const timeLabel = (r) => `${r.replace('-', '–')} min`;
 // Minutos que toma cada serie con su descanso (compuestos más largos) y calentamiento inicial.
 const MIN_PER_SET = { c: 3, i: 1.8 };
 const WARMUP_MIN = 8;
+const BASE_REST = { c: 150, i: 75 };
+// Minutos por serie: trabajo + descanso. Si el descanso es más largo que el típico, la serie cuesta más tiempo.
+function minPerSet(e) {
+  const kind = e.kind || exerciseByName(e.name)?.kind;
+  const base = MIN_PER_SET[kind] ?? 2.4;
+  const rest = Number(e.restSec);
+  return kind && rest > BASE_REST[kind] ? base * (rest / BASE_REST[kind]) : base;
+}
 export function estimateMinutes(day) {
-  return Math.round(WARMUP_MIN + day.exercises.reduce((a, e) => a + (Number(e.sets) || 0) * (MIN_PER_SET[e.kind || exerciseByName(e.name)?.kind] ?? 2.4), 0));
+  return Math.round(WARMUP_MIN + day.exercises.reduce((a, e) => a + (Number(e.sets) || 0) * minPerSet(e), 0));
 }
 
 // Ejercicios que un principiante casi nunca puede hacer bien todavía: se evitan si hay alternativa.
@@ -161,12 +169,12 @@ export const exerciseByName = (name) => EXERCISES.find((e) => e.name.toLowerCase
 // Plantillas de días: [patrón, variante] en orden de prioridad.
 // La variante elige otra opción del mismo patrón. Los brazos van antes que los accesorios menores.
 const DAYS = {
-  FB_A: { name: 'Cuerpo completo A', focus: 'Cuerpo completo', slots: [['sentadilla', 0], ['empuje_h', 0], ['traccion_h', 0], ['isq_iso', 0], ['biceps', 0], ['triceps', 0], ['hombro_lat', 0], ['abdomen', 0], ['gemelos', 0]] },
-  FB_B: { name: 'Cuerpo completo B', focus: 'Cuerpo completo', slots: [['bisagra', 0], ['traccion_v', 0], ['empuje_v', 0], ['cuad_iso', 0], ['triceps', 1], ['biceps', 1], ['hombro_post', 0], ['abdomen', 1], ['pecho_iso', 0]] },
-  FB_C: { name: 'Cuerpo completo C', focus: 'Cuerpo completo', slots: [['sentadilla', 1], ['empuje_h', 1], ['traccion_v', 1], ['bisagra', 1], ['biceps', 2], ['triceps', 2], ['hombro_lat', 1], ['gemelos', 1]] },
-  UA: { name: 'Torso A', focus: 'Pecho, espalda, hombros y brazos', slots: [['empuje_h', 0], ['traccion_h', 0], ['empuje_v', 0], ['traccion_v', 0], ['biceps', 0], ['triceps', 0], ['hombro_lat', 0], ['hombro_post', 0]] },
-  UB: { name: 'Torso B', focus: 'Pecho, espalda, hombros y brazos', slots: [['empuje_h', 1], ['traccion_v', 1], ['traccion_h', 1], ['hombro_lat', 1], ['biceps', 1], ['triceps', 1], ['pecho_iso', 0], ['hombro_post', 1]] },
-  LA: { name: 'Pierna A', focus: 'Cuádriceps, isquios y glúteos', slots: [['sentadilla', 0], ['bisagra', 0], ['cuad_iso', 0], ['isq_iso', 0], ['gemelos', 0], ['abdomen', 0]] },
+  FB_A: { name: 'Cuerpo completo A', focus: 'Cuerpo completo', slots: [['sentadilla', 0], ['empuje_h', 0], ['traccion_h', 0], ['isq_iso', 0], ['hombro_lat', 0], ['biceps', 0], ['triceps', 0], ['abdomen', 0], ['gemelos', 0]] },
+  FB_B: { name: 'Cuerpo completo B', focus: 'Cuerpo completo', slots: [['bisagra', 0], ['traccion_v', 0], ['empuje_h', 2], ['empuje_v', 0], ['cuad_iso', 0], ['hombro_post', 0], ['triceps', 1], ['biceps', 1], ['abdomen', 1]] },
+  FB_C: { name: 'Cuerpo completo C', focus: 'Cuerpo completo', slots: [['sentadilla', 1], ['empuje_h', 1], ['traccion_v', 1], ['bisagra', 1], ['hombro_lat', 1], ['biceps', 2], ['triceps', 2], ['gemelos', 1]] },
+  UA: { name: 'Torso A', focus: 'Pecho, espalda, hombros y brazos', slots: [['empuje_h', 0], ['traccion_h', 0], ['empuje_v', 0], ['traccion_v', 0], ['hombro_lat', 0], ['biceps', 0], ['triceps', 0], ['hombro_post', 0]] },
+  UB: { name: 'Torso B', focus: 'Pecho, espalda, hombros y brazos', slots: [['empuje_h', 1], ['traccion_v', 1], ['traccion_h', 1], ['hombro_lat', 1], ['hombro_post', 1], ['biceps', 1], ['triceps', 1], ['pecho_iso', 0]] },
+  LA: { name: 'Pierna A', focus: 'Cuádriceps, isquios y glúteos', slots: [['sentadilla', 0], ['bisagra', 0], ['cuad_iso', 0], ['isq_iso', 0], ['bisagra', 0], ['gemelos', 0], ['abdomen', 0]] },
   LB: { name: 'Pierna B', focus: 'Glúteos, isquios y cuádriceps', slots: [['bisagra', 1], ['sentadilla', 1], ['isq_iso', 1], ['cuad_iso', 1], ['gemelos', 1], ['abdomen', 1]] },
   PUSH: { name: 'Empuje', focus: 'Pecho, hombros y tríceps', slots: [['empuje_h', 0], ['empuje_v', 0], ['empuje_h', 1], ['hombro_lat', 0], ['triceps', 0], ['triceps', 1], ['pecho_iso', 0]] },
   PULL: { name: 'Tracción', focus: 'Espalda, deltoide posterior y bíceps', slots: [['traccion_v', 0], ['traccion_h', 0], ['traccion_v', 1], ['biceps', 0], ['biceps', 1], ['hombro_post', 0], ['abdomen', 0]] },
@@ -260,6 +268,10 @@ export function generatePlan(profile, splitKey) {
   const maxMin = TIME_RANGES[range][1];
   const prio = prioritized(profile);
   const left = [];
+  // Hombro lateral y posterior: casi nada más los trabaja de forma directa. Al menos un ejercicio de cada
+  // uno por semana entra aunque la sesión quede justa (con 2 series; luego se recortan series de los grandes).
+  const KEY_SLOTS = new Set(['hombro_lat', 'hombro_post']);
+  const covered = new Set();
   const planDays = split.days.map((key) => {
     const tpl = DAYS[key];
     const used = new Set();
@@ -269,12 +281,17 @@ export function generatePlan(profile, splitKey) {
       const ex = pick(pattern, variant, profile, used);
       if (!ex) continue;
       const item = { name: ex.name, muscle: ex.muscle, sec: ex.sec, kind: ex.kind, ...scheme(profile.goal, profile.level, ex.kind), notes: '' };
-      const cost = item.sets * MIN_PER_SET[ex.kind];
+      const cost = item.sets * minPerSet(item);
       // Lo que no cabe en el tiempo se queda por fuera, salvo los músculos que elegiste priorizar.
-      if (minutes + cost > maxMin && !prio.has(ex.muscle)) { left.push(`${ex.name} (${tpl.name})`); continue; }
+      if (minutes + cost > maxMin && !prio.has(ex.muscle)) {
+        const key = KEY_SLOTS.has(pattern) && !covered.has(pattern);
+        if (key && minutes + 2 * minPerSet(item) <= maxMin + 8) item.sets = 2;
+        else { left.push(`${ex.name} (${tpl.name})`); continue; }
+      }
       used.add(ex.id);
       exercises.push(item);
-      minutes += cost;
+      covered.add(pattern);
+      minutes += item.sets * minPerSet(item);
     }
     return { id: uid(), name: tpl.name, focus: tpl.focus, exercises };
   });
@@ -288,6 +305,7 @@ export function generatePlan(profile, splitKey) {
     days: planDays,
     nextDay: 0,
   };
+  ensurePriorities(plan, profile);
   balanceVolume(plan, profile);
   // Si al subir volumen alguna sesión se pasó del tiempo, recorta series de aislamiento (no de prioridades).
   for (const d of plan.days) {
@@ -313,7 +331,7 @@ function rationaleFor(p, days, range, left = [], split = null) {
     salud: 'Para salud y forma: movimientos básicos con margen (2–3 repeticiones en reserva) para ganar fuerza y aprender buena técnica sin lesionarte.',
   }[p.goal];
   if (goalLine) lines.push(goalLine);
-  if (p.priorities?.length) lines.push(`Prioridad en ${p.priorities.map((k) => PRIORITIES[k]?.label.toLowerCase()).filter(Boolean).join(', ')}: más series para esos músculos.`);
+  if (p.priorities?.length) lines.push(`Prioridad en ${p.priorities.map((k) => PRIORITIES[k]?.label.toLowerCase()).filter(Boolean).join(', ')}: más series para esos músculos, y no se recortan aunque la sesión quede justa de tiempo.`);
   lines.push(`Cada sesión está pensada para ${timeLabel(range)}, contando descansos y calentamiento.`);
   if (left.length) lines.push(`Por tiempo quedaron por fuera: ${left.slice(0, 4).join(', ')}. Si tienes más tiempo, súbelo en tu perfil.`);
   lines.push('Son 12 semanas en 3 bloques de 4 (3 de carga + 1 de descarga): cada semana la app te dice qué peso usar y compara tu progreso con el previsto.');
@@ -347,6 +365,23 @@ export function volumeTarget(level, muscle) {
 
 // Ajuste fino: sube series de los músculos por debajo del rango (o de la mitad del rango si son prioridad)
 // y recorta los que se pasan, primero en aislamientos.
+// Patrón con el que se agrega un ejercicio directo para cada músculo priorizado.
+const PRIO_PATTERN = { biceps: ['biceps', 0], triceps: ['triceps', 0], pecho: ['empuje_h', 0], espalda: ['traccion_h', 0], hombros: ['hombro_lat', 0], cuadriceps: ['cuad_iso', 0], isquios: ['isq_iso', 0], gluteos: ['bisagra', 1], abdomen: ['abdomen', 0] };
+function ensurePriorities(plan, profile) {
+  for (const m of prioritized(profile)) {
+    if (plan.days.some((d) => d.exercises.some((e) => e.muscle === m))) continue;
+    const [pattern, variant] = PRIO_PATTERN[m] || [];
+    if (!pattern) continue;
+    // En el día más corto (el que más tiempo libre tiene).
+    const day = [...plan.days].sort((a, b) => estimateMinutes(a) - estimateMinutes(b))[0];
+    const used = new Set(day.exercises.map((e) => exerciseByName(e.name)?.id));
+    // Se busca dentro del patrón la primera opción cuyo músculo principal sea el priorizado.
+    let ex = null;
+    for (let v = variant; v < variant + 6 && !(ex && ex.muscle === m); v++) ex = pick(pattern, v, profile, used);
+    if (ex && ex.muscle === m) day.exercises.push({ name: ex.name, muscle: ex.muscle, sec: ex.sec, kind: ex.kind, ...scheme(profile.goal, profile.level, ex.kind), notes: '' });
+  }
+}
+
 function balanceVolume(plan, profile) {
   const prio = prioritized(profile);
   const cap = maxSets(profile.level);
@@ -483,10 +518,10 @@ export function suggestion(sessions, target, name, unit = 'kg') {
 
 export const PRINCIPLES = [
   { t: 'Volumen', d: 'Entre ~10 y 20 series efectivas por músculo a la semana. Más volumen da más crecimiento hasta cierto punto, con rendimientos decrecientes.', ref: 'Schoenfeld, Ogborn & Krieger (2017), J Sports Sci — dosis-respuesta del volumen.' },
-  { t: 'Frecuencia', d: 'Entrenar cada músculo al menos 2 veces por semana repartiendo el volumen.', ref: 'Schoenfeld, Ogborn & Krieger (2016), Sports Med — frecuencia e hipertrofia.' },
+  { t: 'Frecuencia', d: 'Repartir el volumen en 2 o más sesiones por músculo a la semana es práctico y funciona bien; con el mismo volumen total, la frecuencia importa poco para crecer.', ref: 'Schoenfeld, Ogborn & Krieger (2016), Sports Med — frecuencia e hipertrofia.' },
   { t: 'Repeticiones', d: 'Para músculo, cualquier rango entre ~6 y 30 funciona si llegas cerca del fallo. Para fuerza, las cargas altas (1–6 reps) rinden más.', ref: 'Schoenfeld et al. (2017), JSCR; Lopez et al. (2021), MSSE — carga vs. hipertrofia y fuerza.' },
   { t: 'Esfuerzo (RIR)', d: 'Termina las series a 0–3 repeticiones del fallo. Quedarse lejos del fallo reduce el estímulo; ir siempre al fallo aumenta la fatiga sin mucho beneficio extra.', ref: 'Refalo et al. (2023), Sports Med — proximidad al fallo e hipertrofia.' },
-  { t: 'Descanso', d: '2–3 minutos en ejercicios compuestos; 60–90 s en aislamiento.', ref: 'Schoenfeld et al. (2016), JSCR — descansos largos vs. cortos.' },
+  { t: 'Descanso', d: '2–3 minutos en ejercicios compuestos (lo más estudiado); en aislamiento, 60–90 s suele bastar (más práctica habitual que evidencia directa).', ref: 'Schoenfeld et al. (2016), JSCR — descansos largos vs. cortos.' },
   { t: 'Progresión', d: 'Sobrecarga progresiva con progresión doble: más repeticiones dentro del rango y luego más peso.', ref: 'Principio de sobrecarga progresiva (ACSM Position Stand, 2009).' },
   { t: 'Periodización', d: 'Organizar el entrenamiento en bloques con cargas que cambian a lo largo de semanas mejora más la fuerza máxima que entrenar siempre igual; para hipertrofia ambos enfoques funcionan si el volumen es similar. Por eso el plan dura 12 semanas en 3 bloques.', ref: 'Williams et al. (2017), Sports Med — periodizado vs. no periodizado; Moesgaard et al. (2022), Sports Med.' },
   { t: 'Descargas', d: 'Una semana más ligera cada 4–6 semanas (menos series y más reserva) es una práctica habitual para manejar la fatiga; la evidencia experimental todavía es limitada. El plan programa una cada 4 semanas y puede adelantarla si detecta fatiga.', ref: 'Bell et al. (2023), Sports Med Open — consenso Delphi sobre descargas.' },
