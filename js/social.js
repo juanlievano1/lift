@@ -48,7 +48,7 @@ export function viewAmigos() {
     <div id="fresults"></div>
   </section>
   <div id="frequests"></div>
-  <h3 class="sect">Actividad</h3>
+  <h3 class="sect">Lo último de tu parche</h3>
   <div id="feed"><div class="loading small"><div class="spinner"></div></div></div>
   <div id="flist"></div>`;
 
@@ -98,13 +98,21 @@ const timeout = (p, ms = 15000) => Promise.race([p, new Promise((_, rej) => setT
 // Mensaje de error con el motivo real y un botón para reintentar (el motivo ayuda a saber qué pasó).
 const failBox = (what, err) => `<section class="card empty-card"><p>No se pudieron cargar ${what}.</p><p class="muted small">Motivo: ${esc(err?.message || 'desconocido')}${navigator.onLine ? '' : ' (estás sin conexión)'}</p><button class="btn ghost sm" data-act="retryFriends">Reintentar</button></section>`;
 
+// El entreno más reciente de cada persona (el feed llega ordenado del más nuevo al más viejo).
+function latestPerPerson(items) {
+  const seen = new Set();
+  return items.filter((a) => a.kind === 'session' && !seen.has(a.user_id) && seen.add(a.user_id));
+}
+
 async function loadFeed(userId) {
   const box = $('#feed');
   try {
     const items = await timeout(cloud.feed(userId));
     cache.feed = items;
     if (!box) return;
-    box.innerHTML = items.length ? items.map(safeCard).join('') : `<section class="card empty-card"><p>${userId ? 'Todavía no ha compartido entrenos.' : 'Cuando tú o tus amigos terminen un entreno, aparecerá aquí. Toca a un amigo para ver su avance y su rutina.'}</p></section>`;
+    // Solo lo actual: el último entreno de cada persona (sin historial).
+    const latest = latestPerPerson(items);
+    box.innerHTML = latest.length ? latest.map(safeCard).join('') : `<section class="card empty-card"><p>${userId ? 'Todavía no ha compartido entrenos.' : 'Cuando tú o tus amigos terminen un entreno, aparecerá aquí. Toca a un amigo para ver su avance y su rutina.'}</p></section>`;
   } catch (err) { console.warn('feed', err); if (box) box.innerHTML = failBox('los entrenos', err); }
 }
 
@@ -181,7 +189,7 @@ function routineCard(r, name) {
 
 async function viewFriend(username) {
   const main = $('#main');
-  main.innerHTML = `<header class="top"><div><a class="link" href="#amigos">← Amigos</a><h1>@${esc(username)}</h1></div></header><div id="fhead"></div><h3 class="sect">Sus entrenos</h3><div id="feed"><div class="loading small"><div class="spinner"></div></div></div>`;
+  main.innerHTML = `<header class="top"><div><a class="link" href="#amigos">← Amigos</a><h1>@${esc(username)}</h1></div></header><div id="fhead"></div><h3 class="sect">Su último entreno</h3><div id="feed"><div class="loading small"><div class="spinner"></div></div></div>`;
   try {
     const u = await cloud.findUser(username);
     if (!u) { $('#feed').innerHTML = '<p class="muted">No encontramos a esa persona.</p>'; return; }
@@ -196,7 +204,7 @@ async function viewFriend(username) {
     cache.feed = items || [];
     $('#fhead').insertAdjacentHTML('beforeend', progressCard(items || [], name) + routineCard(routine?.data, name));
     $('#feed').innerHTML = items == null ? failBox('sus entrenos', feedErr)
-      : items.length ? items.map(safeCard).join('')
+      : latestPerPerson(items).length ? latestPerPerson(items).map(safeCard).join('')
       : `<section class="card empty-card"><p>${name} todavía no ha compartido entrenos.</p><p class="muted small">Puede que aún no haya entrenado o que haya elegido no compartirlos.</p></section>`;
   } catch (err) { console.warn('amigo', err); $('#feed').innerHTML = failBox('su perfil', err); }
 }
