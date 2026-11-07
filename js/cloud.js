@@ -54,7 +54,7 @@ async function supabaseBackend() {
     async acceptInvite(code) { return must(await sb.rpc('accept_invite', { p_code: code })); },
     async remove(other) { const me = await uidNow(); must(await sb.from('friendships').delete().or(`and(requester.eq.${me},addressee.eq.${other}),and(requester.eq.${other},addressee.eq.${me})`)); },
     async feed(userId) {
-      let q = sb.from('activity').select('id, user_id, kind, payload, created_at, author:profiles(id, username, display_name), cheers(user_id)').order('created_at', { ascending: false }).limit(40);
+      let q = sb.from('activity').select('id, user_id, kind, payload, created_at, author:profiles!activity_user_id_fkey(id, username, display_name), cheers(user_id)').order('created_at', { ascending: false }).limit(40);
       if (userId) q = q.eq('user_id', userId);
       return must(await q);
     },
