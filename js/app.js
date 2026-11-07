@@ -1208,7 +1208,7 @@ function viewPerfil() {
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
-  <p class="muted small center">${APP_NAME} v0.20${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center">${APP_NAME} v0.21${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -1383,7 +1383,7 @@ Object.assign(actions, {
     if (!msg) { err.textContent = 'Escribe tu comentario antes de enviar.'; err.hidden = false; return; }
     el.disabled = true; el.textContent = 'Enviando…';
     try {
-      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.20' });
+      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.21' });
       closeModal(); toast('¡Gracias! Comentario enviado');
     } catch (ex) { err.textContent = ex.message; err.hidden = false; el.disabled = false; el.textContent = 'Enviar'; }
   },

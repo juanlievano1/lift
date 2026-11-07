@@ -66,6 +66,11 @@ async function supabaseBackend() {
       return data;
     },
     async shareRoutine(id, data) { must(await sb.from('shared_routines').upsert({ user_id: id, data, updated_at: new Date().toISOString() })); },
+    async friendRoutines(ids) {
+      const { data, error } = await sb.from('shared_routines').select('user_id, data, updated_at').in('user_id', ids);
+      if (error) { if (/shared_routines|schema cache|does not exist/i.test(error.message)) return {}; throw new Error(translate(error.message)); }
+      return Object.fromEntries((data || []).map((r) => [r.user_id, r]));
+    },
     async unshareRoutine(id) { must(await sb.from('shared_routines').delete().eq('user_id', id)); },
     async savePush(s) { must(await sb.rpc('save_push_subscription', { p_endpoint: s.endpoint, p_p256dh: s.p256dh, p_auth: s.auth })); },
     async restTimer(id, endsAt, next) { must(await sb.from('rest_timers').upsert({ user_id: id, ends_at: endsAt, next, sent: false, updated_at: new Date().toISOString() })); },
@@ -280,6 +285,8 @@ async function syncSharedRoutine() {
   } catch (e) { console.warn('Rutina compartida pendiente', e); }
 }
 export const friendRoutine = (id) => api.friendRoutine(id);
+// Rutinas compartidas de varios amigos a la vez: { [id]: { data, updated_at } }.
+export const friendRoutines = (ids) => (ids.length ? api.friendRoutines(ids) : Promise.resolve({}));
 
 // ---------- Aviso de fin de descanso por push (llega con el celular bloqueado, sin pausar la música) ----------
 const PUSH_KEY = 'forja.push';
