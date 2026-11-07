@@ -72,7 +72,7 @@ export function viewAmigos() {
 
 async function loadFriends() {
   try {
-    const fr = await cloud.friends();
+    const fr = await timeout(cloud.friends());
     cache.friends = fr;
     const incoming = fr.filter((f) => f.status === 'incoming');
     const outgoing = fr.filter((f) => f.status === 'outgoing');
@@ -93,14 +93,19 @@ async function loadFriends() {
   } catch (err) { toast(err.message); }
 }
 
+// Si la red se queda pegada (pasa en iPhone al volver a la app), no dejar la ruedita girando para siempre.
+const timeout = (p, ms = 15000) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('La conexión tardó demasiado')), ms))]);
+// Mensaje de error con el motivo real y un botón para reintentar (el motivo ayuda a saber qué pasó).
+const failBox = (what, err) => `<section class="card empty-card"><p>No se pudieron cargar ${what}.</p><p class="muted small">Motivo: ${esc(err?.message || 'desconocido')}${navigator.onLine ? '' : ' (estás sin conexión)'}</p><button class="btn ghost sm" data-act="retryFriends">Reintentar</button></section>`;
+
 async function loadFeed(userId) {
   const box = $('#feed');
   try {
-    const items = await cloud.feed(userId);
+    const items = await timeout(cloud.feed(userId));
     cache.feed = items;
     if (!box) return;
     box.innerHTML = items.length ? items.map(safeCard).join('') : `<section class="card empty-card"><p>${userId ? 'Todavía no ha compartido entrenos.' : 'Cuando tú o tus amigos terminen un entreno, aparecerá aquí. Toca a un amigo para ver su avance y su rutina.'}</p></section>`;
-  } catch (err) { if (box) box.innerHTML = `<p class="muted small">${esc(err.message)}</p>`; }
+  } catch (err) { console.warn('feed', err); if (box) box.innerHTML = failBox('los entrenos', err); }
 }
 
 // El contenido de cada actividad lo escribe otra persona: nunca se confía en su forma.
@@ -180,19 +185,20 @@ async function viewFriend(username) {
   try {
     const u = await cloud.findUser(username);
     if (!u) { $('#feed').innerHTML = '<p class="muted">No encontramos a esa persona.</p>'; return; }
-    const fr = cache.friends || (await cloud.friends());
+    const fr = cache.friends?.length ? cache.friends : await timeout(cloud.friends());
     const rel = fr.find((f) => f.id === u.id)?.status;
     $('#fhead').innerHTML = `<section class="card"><div class="person">${avatar(u.display_name || u.username, 'lg')}<span><b>${esc(u.display_name || u.username)}</b><span class="muted small">@${esc(u.username)}</span></span>
       ${rel === 'accepted' ? `<button class="link danger" data-act="removeFriend" data-id="${u.id}" data-confirm="1">Eliminar</button>` : rel ? '<span class="chip">Pendiente</span>' : `<button class="btn primary sm" data-act="addFriend" data-id="${u.id}" data-u="${esc(u.username)}">Agregar</button>`}</div></section>`;
     if (rel !== 'accepted') { $('#feed').innerHTML = '<section class="card empty-card"><p>Cuando sean amigos verás sus entrenos y su avance.</p></section>'; return; }
     const name = esc(u.display_name?.split(' ')[0] || `@${u.username}`);
-    const [items, routine] = await Promise.all([cloud.feed(u.id).catch(() => null), cloud.friendRoutine(u.id).catch(() => null)]);
+    let feedErr = null;
+    const [items, routine] = await Promise.all([timeout(cloud.feed(u.id)).catch((e) => { feedErr = e; console.warn('feed amigo', e); return null; }), timeout(cloud.friendRoutine(u.id)).catch(() => null)]);
     cache.feed = items || [];
     $('#fhead').insertAdjacentHTML('beforeend', progressCard(items || [], name) + routineCard(routine?.data, name));
-    $('#feed').innerHTML = items == null ? '<p class="muted small">No se pudieron cargar sus entrenos. Revisa tu conexión.</p>'
+    $('#feed').innerHTML = items == null ? failBox('sus entrenos', feedErr)
       : items.length ? items.map(safeCard).join('')
       : `<section class="card empty-card"><p>${name} todavía no ha compartido entrenos.</p><p class="muted small">Puede que aún no haya entrenado o que haya elegido no compartirlos.</p></section>`;
-  } catch (err) { $('#feed').innerHTML = `<p class="muted">${esc(err.message)}</p>`; }
+  } catch (err) { console.warn('amigo', err); $('#feed').innerHTML = failBox('su perfil', err); }
 }
 
 async function share() {
@@ -208,6 +214,7 @@ async function share() {
 
 Object.assign(actions, {
   invite: () => share(),
+  retryFriends: () => { cache = { friends: null, feed: null }; viewAmigos(); },
   addFriend: async (el) => {
     try { await cloud.requestFriend(el.dataset.id); toast(`Solicitud enviada a @${el.dataset.u}`); el.outerHTML = '<span class="chip">Pendiente</span>'; loadFriends(); }
     catch (err) { toast(err.message); }
