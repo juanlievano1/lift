@@ -35,7 +35,13 @@ const store = (d) => localStorage.setItem(KEY, JSON.stringify(d));
 const pub = (u) => u && { id: u.id, username: u.username, display_name: u.display_name, username_confirmed: u.username_confirmed !== false };
 
 export function mockBackend() {
-  let d = load(); store(d);
+  let d = load();
+  // Rutina compartida de ejemplo (Sofía la comparte; Andrés no).
+  if (!d.routines) {
+    const sofia = d.users.find((u) => u.username === 'sofia');
+    d.routines = sofia ? { [sofia.id]: { data: { name: 'Torso / Pierna 4 días', mode: 'fases', days: [{ name: 'Torso A', exercises: [{ name: 'Press de banca con barra', sets: 3, repMin: 6, repMax: 10 }, { name: 'Remo en polea sentado', sets: 3, repMin: 8, repMax: 12 }] }, { name: 'Pierna A', exercises: [{ name: 'Sentadilla con barra', sets: 4, repMin: 6, repMax: 10 }, { name: 'Hip thrust con barra', sets: 3, repMin: 8, repMax: 12 }] }] }, updated_at: ago(30) } } : {};
+  }
+  store(d);
   let listener = () => {};
   const current = () => d.users.find((u) => u.id === localStorage.getItem(SKEY)) || null;
   const meId = () => current()?.id;
@@ -123,6 +129,9 @@ export function mockBackend() {
         .map((a) => ({ ...a, author: pub(d.users.find((u) => u.id === a.user_id)), cheers: d.cheers.filter((c) => c.activity_id === a.id).map((c) => ({ user_id: c.user_id })) }));
     },
     async feedback(f) { (d.feedback ||= []).push({ ...f, user_id: meId(), created_at: new Date().toISOString() }); store(d); },
+    async friendRoutine(uid) { return d.routines?.[uid] || null; },
+    async shareRoutine(uid, data) { (d.routines ||= {})[uid] = { data, updated_at: new Date().toISOString() }; store(d); },
+    async unshareRoutine(uid) { if (d.routines) delete d.routines[uid]; store(d); },
     async clearActivity(uid) { d.activity = d.activity.filter((a) => a.user_id !== uid); store(d); },
     async publish(uid, kind, payload) { d.activity.push({ id: id(), user_id: uid, kind, payload, created_at: new Date().toISOString() }); store(d); },
     async cheer(aid, on) { const me = meId(); d.cheers = d.cheers.filter((c) => !(c.activity_id === aid && c.user_id === me)); if (on) d.cheers.push({ activity_id: aid, user_id: me }); store(d); },

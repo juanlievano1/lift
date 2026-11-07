@@ -99,7 +99,7 @@ async function loadFeed(userId) {
     const items = await cloud.feed(userId);
     cache.feed = items;
     if (!box) return;
-    box.innerHTML = items.length ? items.map(safeCard).join('') : `<section class="card empty-card"><p>${userId ? 'Todavía no ha registrado entrenos.' : 'Cuando tú o tus amigos terminen un entreno, aparecerá aquí.'}</p></section>`;
+    box.innerHTML = items.length ? items.map(safeCard).join('') : `<section class="card empty-card"><p>${userId ? 'Todavía no ha compartido entrenos.' : 'Cuando tú o tus amigos terminen un entreno, aparecerá aquí. Toca a un amigo para ver su avance y su rutina.'}</p></section>`;
   } catch (err) { if (box) box.innerHTML = `<p class="muted small">${esc(err.message)}</p>`; }
 }
 
@@ -129,16 +129,54 @@ function activityCard(a) {
   return `<section class="card activity">
     ${head}
     <p class="atitle"><b>${esc(p.dayName)}</b>${p.weekLabel ? ` <span class="muted small">· ${esc(p.weekLabel)}</span>` : ''}</p>
-    <div class="astats"><span><b>${p.durationMin ?? '—'}</b> min</span><span><b>${p.sets ?? '—'}</b> series</span>${p.volumeKg ? `<span><b>${n1(p.volumeKg / 1000)}</b> t movidas</span>` : ''}</div>
+    <div class="astats"><span><b>${p.durationMin ?? '—'}</b> min</span><span><b>${p.sets ?? '—'}</b> series</span>${p.volumeKg ? `<span><b>${Math.round(inUnit(p.volumeKg, myUnit)).toLocaleString('es')}</b> ${myUnit} levantados en total</span>` : ''}</div>
     ${p.prs?.length ? `<p class="prs">🏆 Récord en ${p.prs.map(esc).join(', ')}</p>` : ''}
     ${p.top?.length ? `<ul class="mini">${p.top.map((t) => `<li><span>${esc(t.name)}</span><span>${t.kg ? `${numStr(inUnit(t.kg, myUnit))} ${myUnit} × ${t.reps}` : `${t.reps} reps`}</span></li>`).join('')}</ul>` : ''}
     <div class="afoot"><button class="cheer ${cheered ? 'on' : ''}" data-act="cheer" data-id="${esc(a.id)}" ${mine ? 'disabled' : ''} aria-pressed="${cheered}">💪 ${n ? n : ''} ${mine ? (n ? `fuerza${n > 1 ? 's' : ''}` : 'Sin fuerzas aún') : cheered ? 'Le diste fuerzas' : 'Dar fuerzas'}</button></div>
   </section>`;
 }
 
+// ---------- Perfil de un amigo: su avance (de lo que comparte) y su rutina ----------
+const DAY = 864e5;
+function progressCard(items, name) {
+  const ss = items.filter((a) => a.kind === 'session').map((a) => ({ at: new Date(a.created_at).getTime(), p: a.payload && typeof a.payload === 'object' ? a.payload : {} }));
+  if (!ss.length) return '';
+  const now = Date.now();
+  const n7 = ss.filter((s) => now - s.at < 7 * DAY).length;
+  const n30 = ss.filter((s) => now - s.at < 30 * DAY).length;
+  // Semanas seguidas (de lunes a domingo) con al menos un entreno, contando desde esta semana o la anterior.
+  const monday = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.getTime(); };
+  const weeks = new Set(ss.map((s) => monday(s.at)));
+  let w = monday(now), streak = 0;
+  if (!weeks.has(w)) w -= 7 * DAY;
+  while (weeks.has(w)) { streak++; w -= 7 * DAY; }
+  const prs = [...new Set(ss.filter((s) => now - s.at < 30 * DAY).flatMap((s) => (Array.isArray(s.p.prs) ? s.p.prs : []).map(String)))].slice(0, 5);
+  // Mejor serie de cada ejercicio entre lo que compartió.
+  const best = new Map();
+  for (const s of ss) for (const t of Array.isArray(s.p.top) ? s.p.top : []) {
+    const kg = Number(t?.kg) || 0, reps = Number(t?.reps) || 0, score = kg ? e1rm(kg, reps) : reps;
+    if (t?.name && reps && (!best.has(t.name) || score > best.get(t.name).score)) best.set(t.name, { kg, reps, score });
+  }
+  const unit = db().profile?.unit === 'lb' ? 'lb' : 'kg';
+  const top = [...best.entries()].sort((a, b) => b[1].score - a[1].score).slice(0, 5);
+  return `<section class="card"><h3>Avance de ${name}</h3>
+    <div class="fstats"><div><b>${n7}</b><span>entreno${n7 === 1 ? '' : 's'} en 7 días</span></div><div><b>${n30}</b><span>en 30 días</span></div><div><b>${streak}</b><span>semana${streak === 1 ? '' : 's'} seguida${streak === 1 ? '' : 's'}</span></div></div>
+    <p class="muted small">Último entreno: ${esc(timeAgo(new Date(ss[0].at).toISOString()))}</p>
+    ${prs.length ? `<p class="prs">🏆 Récords recientes: ${prs.map(esc).join(', ')}</p>` : ''}
+    ${top.length ? `<p class="eyebrow">Mejores series</p><ul class="mini">${top.map(([n, b]) => `<li><span>${esc(n)}</span><span>${b.kg ? `${numStr(inUnit(b.kg, unit))} ${unit} × ${b.reps}` : `${b.reps} reps`}</span></li>`).join('')}</ul>` : ''}
+  </section>`;
+}
+function routineCard(r, name) {
+  if (!r || !Array.isArray(r.days)) return `<p class="muted small center">${name} no comparte su rutina.</p>`;
+  return `<section class="card"><h3>Rutina de ${name}</h3><p class="muted small">${esc(r.name)} · ${r.days.length} día${r.days.length === 1 ? '' : 's'} por semana</p>
+    ${r.days.map((d) => `<details class="day"><summary><b>${esc(d?.name)}</b> <span class="muted small">· ${(d?.exercises || []).length} ejercicios</span></summary>
+      <ul class="mini">${(Array.isArray(d?.exercises) ? d.exercises : []).map((e) => `<li><span>${esc(e?.name)}</span><span class="muted">${Number(e?.sets) || '—'} × ${Number(e?.repMin) || ''}–${Number(e?.repMax) || ''}</span></li>`).join('')}</ul></details>`).join('')}
+  </section>`;
+}
+
 async function viewFriend(username) {
   const main = $('#main');
-  main.innerHTML = `<header class="top"><div><a class="link" href="#amigos">← Amigos</a><h1>@${esc(username)}</h1></div></header><div id="fhead"></div><h3 class="sect">Entrenos</h3><div id="feed"><div class="loading small"><div class="spinner"></div></div></div>`;
+  main.innerHTML = `<header class="top"><div><a class="link" href="#amigos">← Amigos</a><h1>@${esc(username)}</h1></div></header><div id="fhead"></div><h3 class="sect">Sus entrenos</h3><div id="feed"><div class="loading small"><div class="spinner"></div></div></div>`;
   try {
     const u = await cloud.findUser(username);
     if (!u) { $('#feed').innerHTML = '<p class="muted">No encontramos a esa persona.</p>'; return; }
@@ -146,8 +184,14 @@ async function viewFriend(username) {
     const rel = fr.find((f) => f.id === u.id)?.status;
     $('#fhead').innerHTML = `<section class="card"><div class="person">${avatar(u.display_name || u.username, 'lg')}<span><b>${esc(u.display_name || u.username)}</b><span class="muted small">@${esc(u.username)}</span></span>
       ${rel === 'accepted' ? `<button class="link danger" data-act="removeFriend" data-id="${u.id}" data-confirm="1">Eliminar</button>` : rel ? '<span class="chip">Pendiente</span>' : `<button class="btn primary sm" data-act="addFriend" data-id="${u.id}" data-u="${esc(u.username)}">Agregar</button>`}</div></section>`;
-    if (rel !== 'accepted') { $('#feed').innerHTML = '<section class="card empty-card"><p>Cuando sean amigos verás sus entrenos.</p></section>'; return; }
-    loadFeed(u.id);
+    if (rel !== 'accepted') { $('#feed').innerHTML = '<section class="card empty-card"><p>Cuando sean amigos verás sus entrenos y su avance.</p></section>'; return; }
+    const name = esc(u.display_name?.split(' ')[0] || `@${u.username}`);
+    const [items, routine] = await Promise.all([cloud.feed(u.id).catch(() => null), cloud.friendRoutine(u.id).catch(() => null)]);
+    cache.feed = items || [];
+    $('#fhead').insertAdjacentHTML('beforeend', progressCard(items || [], name) + routineCard(routine?.data, name));
+    $('#feed').innerHTML = items == null ? '<p class="muted small">No se pudieron cargar sus entrenos. Revisa tu conexión.</p>'
+      : items.length ? items.map(safeCard).join('')
+      : `<section class="card empty-card"><p>${name} todavía no ha compartido entrenos.</p><p class="muted small">Puede que aún no haya entrenado o que haya elegido no compartirlos.</p></section>`;
   } catch (err) { $('#feed').innerHTML = `<p class="muted">${esc(err.message)}</p>`; }
 }
 

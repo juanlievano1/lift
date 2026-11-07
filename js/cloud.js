@@ -60,6 +60,13 @@ async function supabaseBackend() {
     },
     async publish(id, kind, payload) { must(await sb.from('activity').insert({ user_id: id, kind, payload })); },
     async clearActivity(id) { must(await sb.from('activity').delete().eq('user_id', id)); },
+    async friendRoutine(id) {
+      const { data, error } = await sb.from('shared_routines').select('data, updated_at').eq('user_id', id).maybeSingle();
+      if (error) { if (/shared_routines|schema cache|does not exist/i.test(error.message)) return null; throw new Error(translate(error.message)); }
+      return data;
+    },
+    async shareRoutine(id, data) { must(await sb.from('shared_routines').upsert({ user_id: id, data, updated_at: new Date().toISOString() })); },
+    async unshareRoutine(id) { must(await sb.from('shared_routines').delete().eq('user_id', id)); },
     async feedback(f) { must(await sb.from('feedback').insert(f)); },
     async cheer(activityId, on) {
       const me = await uidNow();
@@ -156,7 +163,7 @@ export async function signIn(f) { const u = await api.signIn(f); await setUser(u
 export async function signInWithGoogle() { const u = await api.signInWithGoogle(); if (u) await setUser(u); return u; }
 export async function confirmUsername(username, displayName) { await api.confirmUsername(user.id, username, displayName); me = { ...me, username: username.toLowerCase(), display_name: displayName, username_confirmed: true }; }
 export const needsUsername = () => !!user && me?.username_confirmed === false;
-export async function signOut() { await flush().catch(() => {}); if (!user?.offline) await api.signOut(); user = null; me = null; try { localStorage.removeItem(BASE_KEY); localStorage.removeItem(ME_KEY); } catch {} }
+export async function signOut() { await flush().catch(() => {}); if (!user?.offline) await api.signOut(); user = null; me = null; try { localStorage.removeItem(BASE_KEY); localStorage.removeItem(ME_KEY); localStorage.removeItem(RKEY); } catch {} }
 export const resetPassword = (email) => api.resetPassword(email);
 export const usernameAvailable = (u) => api.usernameAvailable(u);
 export async function updateDisplayName(name) { await api.updateProfile(user.id, { display_name: name }); me.display_name = name; }
@@ -200,6 +207,7 @@ export async function syncOnLogin({ askAdoptLocal }) {
     }
   }
   await flushOutbox();
+  await syncSharedRoutine();
 }
 
 let timer = null;
@@ -219,6 +227,7 @@ async function pushNow() {
     }
     syncState.status = 'ok'; syncState.at = Date.now();
     await flushOutbox();
+    await syncSharedRoutine();
   } catch (e) {
     console.warn('Sincronización pendiente', e);
     syncState.status = 'error';
@@ -236,11 +245,37 @@ document.addEventListener('visibilitychange', async () => {
   try { if (await syncNow()) authListeners.forEach((fn) => fn(user, 'pulled')); } catch {} finally { pushing = false; }
 });
 
-// "Borrar mis datos": también se quita lo publicado en el feed de los amigos.
+// "Borrar mis datos": también se quita lo publicado en el feed de los amigos y la rutina compartida.
 export async function clearActivity() {
   if (!user || user.offline) return;
   try { await api.clearActivity(user.id); } catch (e) { console.warn(e); }
+  try { await api.unshareRoutine(user.id); localStorage.removeItem(RKEY); } catch (e) { console.warn(e); }
 }
+
+// ---------- Rutina compartida con amigos ----------
+// Solo días y ejercicios de la rutina activa, y solo si la persona eligió compartirla (Perfil).
+export const sharesRoutine = () => { const s = db().settings; return s.shareRoutine ?? s.shareActivity === true; };
+function routineSnapshot() {
+  const s = db();
+  const p = s.plans.find((x) => x.id === s.activePlanId);
+  if (!p) return null;
+  return {
+    name: String(p.name || '').slice(0, 80), mode: p.program?.repMode || 'fases',
+    days: p.days.slice(0, 7).map((d) => ({ name: String(d.name || '').slice(0, 40), exercises: d.exercises.slice(0, 15).map((e) => ({ name: String(e.name || '').slice(0, 80), sets: Number(e.sets) || 0, repMin: Number(e.repMin) || 0, repMax: Number(e.repMax) || 0 })) })),
+  };
+}
+const RKEY = 'forja.sharedroutine';
+async function syncSharedRoutine() {
+  if (!user || user.offline || !navigator.onLine || db().owner !== user.id) return;
+  const snap = sharesRoutine() ? routineSnapshot() : null;
+  const sig = `${user.id}:${snap ? hashOf(snap) : 'none'}`;
+  if (localStorage.getItem(RKEY) === sig) return;
+  try {
+    if (snap) await api.shareRoutine(user.id, snap); else await api.unshareRoutine(user.id);
+    localStorage.setItem(RKEY, sig);
+  } catch (e) { console.warn('Rutina compartida pendiente', e); }
+}
+export const friendRoutine = (id) => api.friendRoutine(id);
 
 // ---------- Actividad ----------
 export function publish(kind, payload) {

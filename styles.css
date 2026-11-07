@@ -462,3 +462,8 @@ details.marks summary { cursor: pointer; font-weight: 600; color: var(--ink-2); 
 .superset { background: var(--accent-soft); border-radius: 10px; padding: 6px 10px; margin: 6px 0; }
 .plates { margin: 2px 0 6px; }
 .plates:empty { display: none; }
+
+/* Perfil de amigos */
+.fstats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0; text-align: center; }
+.fstats b { display: block; font-family: var(--font-display); font-size: 28px; color: var(--accent-strong); }
+.fstats span { font-size: 12px; color: var(--muted); }

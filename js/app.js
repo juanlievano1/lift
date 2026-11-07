@@ -185,6 +185,19 @@ function openTour(i = 0) {
   </div>`, false);
 }
 
+// ---------- Instalar la app (así la sesión queda guardada y abre como una app) ----------
+const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const standalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if (location.hash === '' || location.hash === '#hoy') render(); });
+function installCard(s) {
+  if (standalone() || s.settings.installTipDone || !(IOS || installEvt)) return '';
+  return `<section class="card tipcard"><p class="small"><b>📲 Instala Lift en tu celular.</b> ${IOS
+    ? 'En Safari toca <b>Compartir</b> (el cuadro con la flecha) → <b>Agregar a pantalla de inicio</b>, y ábrela siempre desde ese ícono. La primera vez tendrás que entrar una vez más; después tu sesión queda guardada. (En el modo privado de Safari la sesión se borra al cerrar.)'
+    : 'Queda como una app en tu pantalla de inicio y tu sesión queda guardada.'}</p>
+    <div class="actions wrap">${installEvt ? '<button class="btn primary sm" data-act="installApp">Instalar</button>' : ''}<button class="btn ghost sm" data-act="installDone">${IOS ? 'Ya la instalé' : 'Ahora no'}</button></div></section>`;
+}
+
 // ---------- Hoy ----------
 function viewHoy() {
   const s = db();
@@ -204,6 +217,7 @@ function viewHoy() {
   <header class="top"><div><p class="muted">${hi}${s.profile.name ? ', ' + esc(s.profile.name) : ''} · ${new Date().toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long' })}</p><h1>Hoy</h1></div><a href="#perfil" class="me" aria-label="Tu perfil">${avatar(cloud.me?.display_name || s.profile.name)}</a></header>
 
   ${coachBanner()}
+  ${installCard(s)}
 
   ${s.activeSession ? `
   <section class="card accent">
@@ -562,8 +576,8 @@ function shareSession(session) {
   const pref = db().settings.shareActivity;
   if (pref === false) return;
   if (pref === true) return publishSession(session);
-  const ok = confirm('¿Quieres que tus amigos vean tus entrenos (día, duración, series y récords)? Tus notas y tu peso no se comparten. Puedes cambiarlo en Perfil.');
-  update((st) => (st.settings.shareActivity = ok));
+  const ok = confirm('¿Quieres que tus amigos vean tus entrenos (día, duración, series y récords) y tu rutina? Tus notas y tu peso no se comparten. Puedes cambiarlo en Perfil → Qué ven tus amigos.');
+  update((st) => { st.settings.shareActivity = ok; if (st.settings.shareRoutine === undefined) st.settings.shareRoutine = ok; });
   if (ok) publishSession(session);
 }
 
@@ -1157,10 +1171,17 @@ function viewPerfil() {
     ${PRINCIPLES.map((p) => `<details class="day"><summary><b>${p.t}</b></summary><p class="small">${p.d}</p><p class="muted small">${p.ref}</p></details>`).join('')}
   </section>
 
+  ${acc ? `<section class="card">
+    <h3>Qué ven tus amigos</h3>
+    <label class="switch"><input type="checkbox" data-setting="shareActivity" ${s.settings.shareActivity === true ? 'checked' : ''}> Mis entrenos</label>
+    <p class="muted small">Un resumen de cada entreno: día, duración, series, tus mejores series y récords. Con esto ven tu avance.</p>
+    <label class="switch"><input type="checkbox" data-setting="shareRoutine" ${cloud.sharesRoutine() ? 'checked' : ''}> Mi rutina</label>
+    <p class="muted small">Los días y ejercicios de tu rutina activa, con series y repeticiones. Tus pesos, notas y peso corporal nunca se comparten.</p>
+  </section>` : ''}
+
   <section class="card">
     <h3>Tus datos</h3>
     <p class="muted small">${acc ? 'Se guardan en este celular y se sincronizan con tu cuenta.' : 'Todo se guarda en este celular. Exporta un respaldo de vez en cuando.'}</p>
-    ${acc ? `<label class="switch"><input type="checkbox" data-setting="shareActivity" ${s.settings.shareActivity !== false ? 'checked' : ''}> Compartir mis entrenos con mis amigos</label>` : ''}
     <label class="switch"><input type="checkbox" data-setting="restSound" ${s.settings.restSound ? 'checked' : ''}> Sonido al terminar el descanso</label>
     ${lock.supported ? `<label class="switch"><input type="checkbox" data-setting="lockScreen" ${s.settings.lockScreen === true ? 'checked' : ''}> Ver el descanso en la pantalla de bloqueo</label>
     <p class="muted small">Ojo: para mostrarlo, la app reproduce un audio en silencio y eso <b>pausa tu música</b> (Spotify, Apple Music…). Actívalo solo si entrenas sin música.</p>` : ''}
@@ -1176,7 +1197,7 @@ function viewPerfil() {
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
-  <p class="muted small center">${APP_NAME} v0.14${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center">${APP_NAME} v0.15${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -1280,6 +1301,8 @@ Object.assign(actions, {
     update((st) => { const e = st.activeSession.exercises[+el.dataset.ex]; if (e.sets.length > 1) e.sets.pop(); }); viewEntreno();
   },
   backToStart: () => viewStart(),
+  installApp: async () => { if (!installEvt) return; installEvt.prompt(); try { await installEvt.userChoice; } catch {} installEvt = null; update((st) => (st.settings.installTipDone = true)); render(); },
+  installDone: () => { update((st) => (st.settings.installTipDone = true)); render(); },
   swapEx: (el) => openSwap(+el.dataset.ex),
   swapTo: (el) => { const lib = exerciseByName(el.dataset.name); if (lib) swapExercise(lib); },
   swapSearch: () => {
@@ -1349,7 +1372,7 @@ Object.assign(actions, {
     if (!msg) { err.textContent = 'Escribe tu comentario antes de enviar.'; err.hidden = false; return; }
     el.disabled = true; el.textContent = 'Enviando…';
     try {
-      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.14' });
+      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.15' });
       closeModal(); toast('¡Gracias! Comentario enviado');
     } catch (ex) { err.textContent = ex.message; err.hidden = false; el.disabled = false; el.textContent = 'Enviar'; }
   },
