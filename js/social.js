@@ -6,6 +6,7 @@ import { db } from './db.js';
 import { e1rm } from './science.js';
 import { weekInfo } from './program.js';
 import { $, esc, toast, actions, timeAgo, avatar, n1, go } from './ui.js';
+import { inUnit, numStr } from './program.js';
 
 let cache = { friends: null, feed: null };
 let searchTimer = null;
@@ -118,18 +119,19 @@ function activityCard(a) {
   };
   const who = a.author?.display_name || a.author?.username || 'Alguien';
   const mine = a.user_id === cloud.user.id;
+  const myUnit = db().profile?.unit === 'lb' ? 'lb' : 'kg';
   const cheered = (a.cheers || []).some((c) => c.user_id === cloud.user.id);
   const n = (a.cheers || []).length;
   const head = `<div class="ahead">${avatar(who)}<span><b>${mine ? 'Tú' : esc(who)}</b><span class="muted small">${esc(timeAgo(a.created_at))}</span></span></div>`;
   if (a.kind === 'plan') {
-    return `<section class="card activity">${head}<p>Empezó un plan nuevo de 12 semanas: <b>${esc(p.planName)}</b> · ${p.days} días por semana 🗓️</p></section>`;
+    return `<section class="card activity">${head}<p>Empezó una rutina nueva${raw.weeks === 12 ? ' de 12 semanas' : ''}: <b>${esc(p.planName)}</b> · ${p.days} días por semana 🗓️</p></section>`;
   }
   return `<section class="card activity">
     ${head}
     <p class="atitle"><b>${esc(p.dayName)}</b>${p.weekLabel ? ` <span class="muted small">· ${esc(p.weekLabel)}</span>` : ''}</p>
     <div class="astats"><span><b>${p.durationMin ?? '—'}</b> min</span><span><b>${p.sets ?? '—'}</b> series</span>${p.volumeKg ? `<span><b>${n1(p.volumeKg / 1000)}</b> t movidas</span>` : ''}</div>
     ${p.prs?.length ? `<p class="prs">🏆 Récord en ${p.prs.map(esc).join(', ')}</p>` : ''}
-    ${p.top?.length ? `<ul class="mini">${p.top.map((t) => `<li><span>${esc(t.name)}</span><span>${t.kg ? `${n1(t.kg)} kg × ${t.reps}` : `${t.reps} reps`}</span></li>`).join('')}</ul>` : ''}
+    ${p.top?.length ? `<ul class="mini">${p.top.map((t) => `<li><span>${esc(t.name)}</span><span>${t.kg ? `${numStr(inUnit(t.kg, myUnit))} ${myUnit} × ${t.reps}` : `${t.reps} reps`}</span></li>`).join('')}</ul>` : ''}
     <div class="afoot"><button class="cheer ${cheered ? 'on' : ''}" data-act="cheer" data-id="${esc(a.id)}" ${mine ? 'disabled' : ''} aria-pressed="${cheered}">💪 ${n ? n : ''} ${mine ? (n ? `fuerza${n > 1 ? 's' : ''}` : 'Sin fuerzas aún') : cheered ? 'Le diste fuerzas' : 'Dar fuerzas'}</button></div>
   </section>`;
 }

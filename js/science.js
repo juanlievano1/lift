@@ -40,7 +40,7 @@ export function estimateMinutes(day) {
 }
 
 // Ejercicios que un principiante casi nunca puede hacer bien todavía: se evitan si hay alternativa.
-const HARD = new Set(['dominadas', 'dominadas_sup', 'fondos', 'nordico', 'piernas_colgado', 'rueda', 'chin_neg', 'sissy', 'pica', 'flexiones_deficit']);
+const HARD = new Set(['peso_muerto', 'dominadas', 'dominadas_sup', 'fondos', 'nordico', 'piernas_colgado', 'rueda', 'chin_neg', 'sissy', 'pica', 'flexiones_deficit']);
 
 // Grupos que el usuario puede priorizar.
 export const PRIORITIES = {
@@ -99,6 +99,7 @@ export const EXERCISES = [
   L('hip_thrust_mc', 'Hip thrust con mancuerna', 'bisagra', 'gluteos', ['isquios'], 'mancuernas', 'c'),
   L('hip_thrust_1p', 'Hip thrust a una pierna', 'bisagra', 'gluteos', ['isquios'], 'peso_corporal', 'c'),
   L('rumano_1p', 'Peso muerto a una pierna (peso corporal)', 'bisagra', 'isquios', ['gluteos'], 'peso_corporal', 'c'),
+  L('peso_muerto', 'Peso muerto convencional', 'bisagra', 'gluteos', ['isquios', 'espalda', 'cuadriceps'], 'barra', 'c'),
   // Cuádriceps accesorio
   L('extension_cuad', 'Extensión de cuádriceps', 'cuad_iso', 'cuadriceps', [], 'maquina', 'i'),
   L('zancadas_mc', 'Zancadas caminando con mancuernas', 'cuad_iso', 'cuadriceps', ['gluteos'], 'mancuernas', 'c'),
@@ -160,9 +161,9 @@ export const exerciseByName = (name) => EXERCISES.find((e) => e.name.toLowerCase
 // Plantillas de días: [patrón, variante] en orden de prioridad.
 // La variante elige otra opción del mismo patrón. Los brazos van antes que los accesorios menores.
 const DAYS = {
-  FB_A: { name: 'Full Body A', focus: 'Cuerpo completo', slots: [['sentadilla', 0], ['empuje_h', 0], ['traccion_h', 0], ['isq_iso', 0], ['biceps', 0], ['triceps', 0], ['hombro_lat', 0], ['abdomen', 0], ['gemelos', 0]] },
-  FB_B: { name: 'Full Body B', focus: 'Cuerpo completo', slots: [['bisagra', 0], ['traccion_v', 0], ['empuje_v', 0], ['cuad_iso', 0], ['triceps', 1], ['biceps', 1], ['hombro_post', 0], ['abdomen', 1], ['pecho_iso', 0]] },
-  FB_C: { name: 'Full Body C', focus: 'Cuerpo completo', slots: [['sentadilla', 1], ['empuje_h', 1], ['traccion_v', 1], ['bisagra', 1], ['biceps', 2], ['triceps', 2], ['hombro_lat', 1], ['gemelos', 1]] },
+  FB_A: { name: 'Cuerpo completo A', focus: 'Cuerpo completo', slots: [['sentadilla', 0], ['empuje_h', 0], ['traccion_h', 0], ['isq_iso', 0], ['biceps', 0], ['triceps', 0], ['hombro_lat', 0], ['abdomen', 0], ['gemelos', 0]] },
+  FB_B: { name: 'Cuerpo completo B', focus: 'Cuerpo completo', slots: [['bisagra', 0], ['traccion_v', 0], ['empuje_v', 0], ['cuad_iso', 0], ['triceps', 1], ['biceps', 1], ['hombro_post', 0], ['abdomen', 1], ['pecho_iso', 0]] },
+  FB_C: { name: 'Cuerpo completo C', focus: 'Cuerpo completo', slots: [['sentadilla', 1], ['empuje_h', 1], ['traccion_v', 1], ['bisagra', 1], ['biceps', 2], ['triceps', 2], ['hombro_lat', 1], ['gemelos', 1]] },
   UA: { name: 'Torso A', focus: 'Pecho, espalda, hombros y brazos', slots: [['empuje_h', 0], ['traccion_h', 0], ['empuje_v', 0], ['traccion_v', 0], ['biceps', 0], ['triceps', 0], ['hombro_lat', 0], ['hombro_post', 0]] },
   UB: { name: 'Torso B', focus: 'Pecho, espalda, hombros y brazos', slots: [['empuje_h', 1], ['traccion_v', 1], ['traccion_h', 1], ['hombro_lat', 1], ['biceps', 1], ['triceps', 1], ['pecho_iso', 0], ['hombro_post', 1]] },
   LA: { name: 'Pierna A', focus: 'Cuádriceps, isquios y glúteos', slots: [['sentadilla', 0], ['bisagra', 0], ['cuad_iso', 0], ['isq_iso', 0], ['gemelos', 0], ['abdomen', 0]] },
@@ -171,7 +172,7 @@ const DAYS = {
   PULL: { name: 'Tracción', focus: 'Espalda, deltoide posterior y bíceps', slots: [['traccion_v', 0], ['traccion_h', 0], ['traccion_v', 1], ['biceps', 0], ['biceps', 1], ['hombro_post', 0], ['abdomen', 0]] },
   PUSH2: { name: 'Empuje B', focus: 'Pecho, hombros y tríceps', slots: [['empuje_h', 1], ['empuje_v', 1], ['pecho_iso', 1], ['hombro_lat', 1], ['triceps', 1], ['triceps', 2], ['empuje_h', 2]] },
   PULL2: { name: 'Tracción B', focus: 'Espalda, deltoide posterior y bíceps', slots: [['traccion_h', 1], ['traccion_v', 1], ['traccion_h', 2], ['biceps', 1], ['biceps', 2], ['hombro_post', 1], ['abdomen', 1]] },
-  FB_D: { name: 'Full Body D', focus: 'Cuerpo completo', slots: [['bisagra', 1], ['empuje_v', 1], ['traccion_h', 1], ['cuad_iso', 1], ['biceps', 1], ['triceps', 1], ['hombro_post', 1], ['abdomen', 0]] },
+  FB_D: { name: 'Cuerpo completo D', focus: 'Cuerpo completo', slots: [['bisagra', 1], ['empuje_v', 1], ['traccion_h', 1], ['cuad_iso', 1], ['biceps', 1], ['triceps', 1], ['hombro_post', 1], ['abdomen', 0]] },
   // Rutinas por grupos musculares (la clásica de gimnasio).
   CHEST: { name: 'Pecho y tríceps', focus: 'Pecho y tríceps', slots: [['empuje_h', 0], ['empuje_h', 1], ['pecho_iso', 0], ['empuje_h', 2], ['triceps', 0], ['triceps', 1]] },
   BACK: { name: 'Espalda y bíceps', focus: 'Espalda y bíceps', slots: [['traccion_v', 0], ['traccion_h', 0], ['traccion_h', 1], ['traccion_v', 1], ['biceps', 0], ['biceps', 1]] },
@@ -307,7 +308,7 @@ function rationaleFor(p, days, range, left = [], split = null) {
   const goalLine = {
     hipertrofia: 'Para ganar músculo: series de 6–15 repeticiones cerca del fallo, con 10–20 series por músculo a la semana.',
     fuerza: 'Para ganar fuerza: los básicos en 4–6 repeticiones con descansos largos; los accesorios sostienen el músculo que luego empuja la fuerza.',
-    grasa: 'Para perder grasa: el déficit lo pone la comida (bajar 0,5–1 % de tu peso por semana). Este plan existe para que el peso que pierdas sea grasa y no músculo: mantienes cargas pesadas y volumen suficiente. Suma 8.000–10.000 pasos al día.',
+    grasa: 'Para perder grasa: el déficit lo pone la comida (bajar 0,5–1 % de tu peso por semana). Este plan existe para que pierdas la menor cantidad posible de músculo: mantienes cargas pesadas y volumen suficiente. Suma 8.000–10.000 pasos al día.',
     recomposicion: 'Para recomposición: cargas pesadas y volumen suficiente para ganar músculo mientras comes cerca de tu mantenimiento, con suficiente proteína.',
     salud: 'Para salud y forma: movimientos básicos con margen (2–3 repeticiones en reserva) para ganar fuerza y aprender buena técnica sin lesionarte.',
   }[p.goal];
@@ -378,7 +379,7 @@ const START_RATIO = {
   jalon: 0.8, jalon_neutro: 0.8, pullover_mc: 0.3,
   remo_polea: 0.8, remo_barra: 0.85, remo_mc: 0.42, remo_maq: 0.75,
   sentadilla: 1.3, prensa: 2.3, hack: 1.4, bulgara_mc: 0.3, goblet: 0.45,
-  rumano: 1.1, hip_thrust: 1.5, rumano_mc: 0.4, hip_thrust_mc: 0.6,
+  rumano: 1.1, hip_thrust: 1.5, peso_muerto: 1.5, rumano_mc: 0.4, hip_thrust_mc: 0.6,
   extension_cuad: 0.7, zancadas_mc: 0.25, step_up_mc: 0.25,
   curl_fem_sent: 0.6, curl_fem_tumb: 0.5, rumano_1p_mc: 0.3,
   aperturas_polea: 0.2, pec_deck: 0.6, aperturas_mc: 0.15,
@@ -397,7 +398,7 @@ export const perHand = (name) => PER_HAND.has(exerciseByName(name)?.id);
 
 // Devuelve el 1RM estimado para empezar, o null si no hay referencia (peso corporal o ejercicio propio).
 // Marcas que la persona puede dar en su perfil (1RM aproximado, en kg).
-export const MARK_LIFTS = { banca: 'Press de banca', sentadilla: 'Sentadilla', militar: 'Press militar' };
+export const MARK_LIFTS = { banca: 'Press de banca', sentadilla: 'Sentadilla', peso_muerto: 'Peso muerto', militar: 'Press militar' };
 const byId = (id) => EXERCISES.find((e) => e.id === id);
 
 // 1RM típico según peso, nivel y sexo (sin marcas personales).
@@ -425,8 +426,8 @@ export function estimateStart1RM(profile, name) {
   // Con marcas: qué tan fuerte es la persona frente a la referencia, por tren superior e inferior.
   const factor = (ids) => { const f = ids.filter((k) => marks[k] > 0).map((k) => marks[k] / standard1RM(profile, k)); return f.length ? f.reduce((a, b) => a + b) / f.length : null; };
   const upper = UPPER.has(ex.muscle);
-  let f = upper ? factor(['banca', 'militar']) : factor(['sentadilla']);
-  if (f == null) { const other = upper ? factor(['sentadilla']) : factor(['banca', 'militar']); f = other == null ? 1 : Math.sqrt(other); }
+  let f = upper ? factor(['banca', 'militar']) : factor(['sentadilla', 'peso_muerto']);
+  if (f == null) { const other = upper ? factor(['sentadilla', 'peso_muerto']) : factor(['banca', 'militar']); f = other == null ? 1 : Math.sqrt(other); }
   f = Math.min(Math.max(f, 0.4), 2.5);
   return standard1RM(profile, ex.id) * f * (has ? 0.95 : 0.9); // por debajo: mejor empezar fácil y subir
 }
@@ -488,7 +489,7 @@ export const PRINCIPLES = [
   { t: 'Descanso', d: '2–3 minutos en ejercicios compuestos; 60–90 s en aislamiento.', ref: 'Schoenfeld et al. (2016), JSCR — descansos largos vs. cortos.' },
   { t: 'Progresión', d: 'Sobrecarga progresiva con progresión doble: más repeticiones dentro del rango y luego más peso.', ref: 'Principio de sobrecarga progresiva (ACSM Position Stand, 2009).' },
   { t: 'Periodización', d: 'Organizar el entrenamiento en bloques con cargas que cambian a lo largo de semanas mejora más la fuerza máxima que entrenar siempre igual; para hipertrofia ambos enfoques funcionan si el volumen es similar. Por eso el plan dura 12 semanas en 3 bloques.', ref: 'Williams et al. (2017), Sports Med — periodizado vs. no periodizado; Moesgaard et al. (2022), Sports Med.' },
-  { t: 'Descargas', d: 'Una semana más ligera cada 4–6 semanas (menos series y más reserva) ayuda a disipar la fatiga y a seguir progresando. El plan programa una cada 4 semanas y puede adelantarla si detecta fatiga.', ref: 'Bell et al. (2023), Sports Med Open — consenso Delphi sobre descargas.' },
+  { t: 'Descargas', d: 'Una semana más ligera cada 4–6 semanas (menos series y más reserva) es una práctica habitual para manejar la fatiga; la evidencia experimental todavía es limitada. El plan programa una cada 4 semanas y puede adelantarla si detecta fatiga.', ref: 'Bell et al. (2023), Sports Med Open — consenso Delphi sobre descargas.' },
   { t: 'Autorregulación', d: 'Registrar las repeticiones en reserva (RIR) permite ajustar la carga a cómo estás ese día y estimar tu fuerza real sin ir al fallo. El plan compara esa estimación con la proyectada y propone ajustes.', ref: 'Zourdos et al. (2016), JSCR — escala RIR; Helms et al. (2018), Front Physiol — carga por RPE vs. %1RM.' },
   { t: 'Proteína', d: '1,6–2,2 g por kg de peso al día para maximizar la ganancia de músculo.', ref: 'Morton et al. (2018), Br J Sports Med — metaanálisis de proteína.' },
   { t: 'Ritmo de peso', d: 'Pérdida de grasa: −0,5 a −1 % del peso por semana para conservar músculo. Ganancia: +0,25 a +0,5 % por semana.', ref: 'Helms et al. (2014), JISSN — recomendaciones basadas en evidencia.' },

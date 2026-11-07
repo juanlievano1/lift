@@ -75,7 +75,7 @@ export function viewAuth() {
   }
   const signup = mode === 'signup';
   const reset = mode === 'reset';
-  main.innerHTML = `${head}<h1>${signup ? 'Crea tu cuenta' : reset ? 'Recuperar contraseña' : 'Bienvenido de vuelta'}</h1></section>
+  main.innerHTML = `${head}<h1>${signup ? 'Crea tu cuenta' : reset ? 'Recuperar contraseña' : '¡Qué bueno verte otra vez!'}</h1></section>
     ${reset ? '' : `${googleBtn(signup ? 'Registrarme con Google' : 'Entrar con Google')}<div class="divider"><span>o con tu correo</span></div>`}
     <form id="authf" class="card form" novalidate>
       ${signup ? `
@@ -196,7 +196,7 @@ export async function consumeInvite() {
     if (inv.code) {
       const who = await cloud.acceptInvite(inv.code);
       cloud.clearInvite();
-      if (who) { toast(`¡Listo! Ya eres amigo de @${who}`); rerender(); }
+      if (who) { toast(`¡Listo! @${who} y tú ya son amigos`); rerender(); }
     } else if (inv.username === cloud.me?.username) {
       cloud.clearInvite();
     } else {

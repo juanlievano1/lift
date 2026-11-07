@@ -201,11 +201,11 @@ export function prescribe(plan, sessions, ex, w, profile = null) {
     if (est) {
       const raw = est / repsFactor(targetReps + rir);
       kg = roundLoad(raw, ex, unit);
-      text = barHint(ex, raw, kg, unit, targetReps) || `Peso sugerido para empezar: ${fmtW(kg, unit)}${perHand(ex.name) ? ' por mancuerna' : ''} × ${targetReps} reps (${estSource(profile)}). Si te sobran más de ${rir} reps o no llegas, ajústalo: esta sesión calibra tu plan.`;
+      text = barHint(ex, raw, kg, unit, targetReps) || `Peso sugerido para empezar: ${fmtW(kg, unit)}${perHand(ex.name) ? ' por mancuerna' : ''} × ${targetReps} reps (${estSource(profile)}). Si te sobran más de ${rir} rep${rir === 1 ? '' : 's'} o no llegas, ajústalo: esta sesión calibra tu plan.`;
     } else if (bw) {
       text = `Primera vez: haz ${targetReps} reps por serie dejando ${rir} en reserva. Si no llegas, haz la versión más fácil; si te sobran muchas, ponle más dificultad.`;
     } else {
-      text = `Primera vez: elige un peso con el que hagas ${targetReps} reps dejando ${rir} en reserva. Con eso calculo tu progresión.`;
+      text = `Primera vez: elige un peso con el que hagas ${targetReps} reps dejando ${rir} en reserva. Con eso la app calcula tu progresión.`;
     }
   } else if (bw) {
     const reps = Math.round(pm - rir);
@@ -267,7 +267,7 @@ export function prescribeDouble(plan, sessions, ex, profile = null) {
     if (est) {
       const raw = est / repsFactor(target + rir);
       const kg = roundLoad(raw, ex, unit);
-      return { ...base, targetReps: target, kg, text: barHint(ex, raw, kg, unit, target) || `Peso sugerido para empezar: ${W(kg)}${hand} × ${target} reps (${estSource(profile)}). Si te sobran más de ${rir} reps o no llegas, ajústalo: así la app aprende tu nivel.` };
+      return { ...base, targetReps: target, kg, text: barHint(ex, raw, kg, unit, target) || `Peso sugerido para empezar: ${W(kg)}${hand} × ${target} reps (${estSource(profile)}). Si te sobran más de ${rir} rep${rir === 1 ? '' : 's'} o no llegas, ajústalo: así la app aprende tu nivel.` };
     }
     return { ...base, targetReps: target, kg: null, text: bw ? `Primera vez: haz ${target}–${repMax} reps por serie dejando ${rir} en reserva.` : `Primera vez: elige un peso con el que hagas ${target} reps dejando ${rir} en reserva.` };
   }
@@ -368,7 +368,7 @@ export function review(plan, sessions, { now, profile, weightRate }) {
     const hard = info.inBlock === 3;
     recs.push({ key: 'down', level: 'warn', title: `Por debajo del plan en ${downs.length} ejercicio${downs.length > 1 ? 's' : ''}`, text: hard
       ? `${downs.map((s) => s.ex.name).join(', ')}: es la semana más exigente del bloque; es normal rendir un poco menos. La descarga de la semana ${nextDeload} debería devolverte el rendimiento.`
-      : `${downs.map((s) => s.ex.name).join(', ')}: dos sesiones seguidas por debajo. Ajusto los objetivos a tu nivel real para que la progresión sea alcanzable.`,
+      : `${downs.map((s) => s.ex.name).join(', ')}: dos sesiones seguidas por debajo. La app ajusta los objetivos a tu nivel real para que la progresión sea alcanzable.`,
       action: hard ? null : 'recal', payload: downs.map((s) => s.ex.name), cta: hard ? null : 'Ajustar objetivos' });
   }
 

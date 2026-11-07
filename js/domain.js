@@ -6,7 +6,7 @@ import { newProgram, weekOf, review, fmtW } from './program.js';
 import { n1 } from './ui.js';
 import { COACH_ENABLED } from './config.js';
 
-export const MODE_LABEL = { doble: 'Progresión doble', fases: 'Plan por fases de 12 semanas', fijo: 'Tus reps, con fases y descargas' };
+export const MODE_LABEL = { doble: 'Progresión doble: subes al completar las reps', fases: 'Plan de 12 semanas por fases', fijo: 'Tus reps, con subida semanal y descargas' };
 export const SOURCE = { ciencia: 'Creada con ciencia', ia: 'Creada con el coach', propia: 'Tu rutina' };
 
 // Convierte una rutina en un plan de 12 semanas que empieza hoy.
@@ -15,7 +15,7 @@ export function withProgram(plan, repMode) {
   return plan;
 }
 
-export const rxLabel = (rx, unit = 'kg') => (rx.kg ? `${rx.sets}×${rx.targetReps} · ${fmtW(rx.kg, unit)}` : `${rx.sets}×${rx.repMin}–${rx.repMax}`);
+export const rxLabel = (rx, unit = 'kg') => (rx.kg ? `${rx.sets} × ${rx.targetReps} reps · ${fmtW(rx.kg, unit)}` : `${rx.sets} × ${rx.repMin}–${rx.repMax} reps`);
 
 export const currentWeek = (plan) => weekOf(plan, today());
 

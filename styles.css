@@ -7,7 +7,7 @@
   --line: #e6ded3;
   --ink: #17120e;
   --ink-2: #4a4038;
-  --muted: #857a70;
+  --muted: #6b6158;  /* contraste AA (≈5,5:1) sobre el fondo crema */
   --accent: #ec5a1c;
   --accent-strong: #c2410c;
   --accent-ink: #ffffff;
@@ -148,7 +148,7 @@ details.day[open] summary::before { transform: rotate(90deg); }
 .edtop { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .edgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .edgrid label { margin-top: 6px; font-size: 11px; }
-.edgrid input, .edgrid select { padding: 8px; font-size: 15px; }
+.edgrid input, .edgrid select { padding: 8px; font-size: 16px; } /* 16px: iPhone no hace zoom al tocar */
 
 /* Volumen */
 .vbars { display: grid; gap: 8px; margin: 10px 0 4px; }
@@ -403,7 +403,7 @@ details.more summary { font-size: 13px; color: var(--muted); cursor: pointer; }
 .modes .mode .muted { display: block; line-height: 1.4; }
 
 /* Unidad del ejercicio (kg ⇄ lb) en la cabecera de las series */
-.unitbtn { font: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-strong); background: var(--accent-soft); border: 0; border-radius: 99px; padding: 3px 8px; justify-self: center; cursor: pointer; }
+.unitbtn { font: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-strong); background: var(--accent-soft); border: 0; border-radius: 99px; padding: 8px 10px; min-height: 36px; font-size: 12px; justify-self: center; cursor: pointer; }
 
 /* Elegir distribución de días */
 .daychips { display: flex; gap: 8px; margin: 6px 0 14px; }
@@ -441,7 +441,17 @@ button.chip { border: 1px solid var(--line); cursor: pointer; text-transform: no
 .firsttips li { margin-bottom: 6px; }
 
 /* Marcas personales (opcional) en el perfil */
-.row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.row3 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .row3 label { font-size: 13px; }
 details.marks { margin: 4px 0 12px; }
 details.marks summary { cursor: pointer; font-weight: 600; color: var(--ink-2); padding: 6px 0; }
+
+/* Fase 4: primer uso y accesibilidad */
+::placeholder { color: var(--ink-2); opacity: 0.6; }
+.howto { display: inline-block; font-size: 13px; color: var(--accent-strong); text-decoration: none; padding: 6px 0; font-weight: 600; }
+.goalhelp { margin: -4px 0 12px; line-height: 1.45; }
+.summary { text-align: center; }
+.summary .prs { display: inline-block; }
+.exfoot .link { min-height: 44px; padding: 0 6px; }
+.exfoot { gap: 12px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }

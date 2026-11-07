@@ -53,7 +53,7 @@ export function reviewRoutine(plan, profile) {
         items.push({
           id: `falta-${m}`, level: small ? 'info' : 'warn',
           title: vol[m] ? `Pocas series de ${MUSCLES[m].toLowerCase()}` : `No trabajas ${MUSCLES[m].toLowerCase()} directamente`,
-          text: `Tienes ${fmt(vol[m])} series a la semana${vol[m] ? ', solo de forma indirecta' : ''} (recomendado ${lo}–${hi} para tu nivel)${ex ? `. Te propongo ${ex.name} en ${plan.days[di].name}.` : '.'}`,
+          text: `Tienes ${fmt(vol[m])} series a la semana${vol[m] ? ', solo de forma indirecta' : ''} (recomendado ${lo}–${hi} para tu nivel)${ex ? `. Sugerencia: ${ex.name} en ${plan.days[di].name}.` : '.'}`,
           fix: ex ? { type: 'addExercise', name: ex.name, day: di, label: `Agregar ${ex.name}` } : null,
         });
       } else if (exs.length) {
@@ -94,14 +94,14 @@ export function reviewRoutine(plan, profile) {
   plan.days.forEach((d, i) => {
     if (!d.exercises.length) return;
     const min = estimateMinutes(d);
-    if (min > maxMin + 2) items.push({ id: `largo-${i}`, level: 'warn', title: `${d.name} dura ≈ ${min} min`, text: `Tu tiempo por sesión es de hasta ${maxMin} min. Puedo recortar series de los aislamientos de ese día.`, fix: { type: 'trimDay', day: i, max: maxMin, label: 'Recortar a tiempo' } });
+    if (min > maxMin + 2) items.push({ id: `largo-${i}`, level: 'warn', title: `${d.name} dura ≈ ${min} min`, text: `Tu tiempo por sesión es de hasta ${maxMin} min. La app puede recortar series de los aislamientos de ese día.`, fix: { type: 'trimDay', day: i, max: maxMin, label: 'Recortar a tiempo' } });
     // Orden: los compuestos primero, cuando estás fresco.
     const firstIso = d.exercises.findIndex((e) => kindOf(e) === 'i');
     const lastComp = d.exercises.map(kindOf).lastIndexOf('c');
     if (firstIso !== -1 && lastComp > firstIso) items.push({ id: `orden-${i}`, level: 'info', title: `Orden en ${d.name}`, text: 'Tienes aislamientos antes que ejercicios compuestos. Hacer primero los compuestos te deja levantar más donde más importa.', fix: { type: 'reorder', day: i, label: 'Ordenar' } });
     const names = d.exercises.map((e) => e.name);
     const dup = names.find((n, k) => names.indexOf(n) !== k);
-    if (dup) items.push({ id: `dup-${i}`, level: 'warn', title: `${dup} está dos veces en ${d.name}`, text: 'Probablemente es un error. Puedo dejar solo uno.', fix: { type: 'dedupe', day: i, label: 'Dejar uno' } });
+    if (dup) items.push({ id: `dup-${i}`, level: 'warn', title: `${dup} está dos veces en ${d.name}`, text: 'Probablemente es un error. La app puede dejar solo uno.', fix: { type: 'dedupe', day: i, label: 'Dejar uno' } });
     d.exercises.forEach((e, k) => {
       if (Number(e.repMin) > Number(e.repMax)) items.push({ id: `reps-${i}-${k}`, level: 'warn', title: `Rango invertido en ${e.name}`, text: `Mínimo ${e.repMin} y máximo ${e.repMax}.`, fix: { type: 'swapReps', day: i, name: e.name, label: 'Corregir' } });
       else if (Number(e.repMax) > 30) items.push({ id: `reps-${i}-${k}`, level: 'info', title: `${e.name}: hasta ${e.repMax} reps`, text: 'Por encima de ~30 reps el estímulo se parece más a resistencia que a fuerza o músculo.' });

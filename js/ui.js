@@ -18,25 +18,37 @@ export function timeAgo(isoDateTime) {
 
 export function toast(msg) {
   const t = $('#toast');
-  t.textContent = msg;
+  t.setAttribute('role', 'status');
   t.hidden = false;
+  t.textContent = msg;
   clearTimeout(toast.t);
   toast.t = setTimeout(() => (t.hidden = true), 2800);
 }
 
+let lastFocus = null;
 export function openModal(html, closable = true) {
   const m = $('#modal');
-  m.innerHTML = `<div class="sheet">${closable ? '<button class="icon close" data-act="closeModal" aria-label="Cerrar">✕</button>' : ''}${html}</div>`;
+  if (m.hidden) lastFocus = document.activeElement;
+  m.innerHTML = `<div class="sheet" role="dialog" aria-modal="true">${closable ? '<button class="icon close" data-act="closeModal" aria-label="Cerrar">✕</button>' : ''}${html}</div>`;
   m.hidden = false;
   m.dataset.closable = closable ? '1' : '';
   document.body.classList.add('noscroll');
+  // El foco entra al diálogo (para lectores de pantalla y teclado).
+  const sheet = m.querySelector('.sheet');
+  const h = sheet.querySelector('h2, h3');
+  if (h) { h.tabIndex = -1; sheet.setAttribute('aria-labelledby', h.id || (h.id = 'modal-title')); }
+  setTimeout(() => (sheet.querySelector('input, textarea, select') || h || sheet).focus?.({ preventScroll: true }), 30);
 }
 
 export function closeModal() {
   $('#modal').hidden = true;
   $('#modal').innerHTML = '';
   document.body.classList.remove('noscroll');
+  try { lastFocus?.focus?.({ preventScroll: true }); } catch {}
+  lastFocus = null;
 }
+// Escape cierra el diálogo (si se puede cerrar).
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#modal').hidden && $('#modal').dataset.closable) closeModal(); });
 
 export const modalOpen = () => !$('#modal').hidden;
 
