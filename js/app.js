@@ -1,8 +1,8 @@
 import { db, update, uid, today, activePlan, exportJSON, importJSON, resetAll, requestPersistence } from './db.js';
-import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, PRIORITIES, exerciseDefaults, TIME_RANGES, timeRangeOf, timeLabel, estimateMinutes, generatePlan, SPLIT_OPTIONS, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName } from './science.js';
+import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, PRIORITIES, exerciseDefaults, TIME_RANGES, timeRangeOf, timeLabel, estimateMinutes, generatePlan, SPLIT_OPTIONS, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName, MARK_LIFTS } from './science.js';
 import { lineChart, volumeBars } from './charts.js';
 import { reviewRoutine, applyFix } from './routine.js';
-import { WEEKS, newProgram, ensureProgram, weekInfo, prescribe, unitOf, inUnit, fromUnit, numStr, fmtW, exerciseTrack, exerciseStatus, uniqueExercises, applyRec, dismissRec, blocksFor, planReport, applyReviewChanges } from './program.js';
+import { WEEKS, newProgram, ensureProgram, weekInfo, prescribe, unitOf, inUnit, fromUnit, numStr, fmtW, roundLoad, exerciseTrack, exerciseStatus, uniqueExercises, applyRec, dismissRec, blocksFor, planReport, applyReviewChanges } from './program.js';
 import { $, esc, fmtDate, n1, clone, toast, openModal, closeModal, modalOpen, actions, routes, setRenderer, go, avatar } from './ui.js';
 import { MODE_LABEL, SOURCE, withProgram, rxLabel, currentWeek, weekStart, weightStats, weightText, planRecs } from './domain.js';
 import * as cloud from './cloud.js';
@@ -91,15 +91,22 @@ function profileForm(p = {}) {
   <fieldset class="prios"><legend>¿Qué quieres priorizar? <span class="muted">(opcional, máximo 2)</span></legend>
     ${Object.entries(PRIORITIES).map(([k, v]) => `<label class="pchip"><input type="checkbox" name="prio" value="${k}" ${(p.priorities || []).includes(k) ? 'checked' : ''}><span>${v.label}</span></label>`).join('')}
   </fieldset>
-  <label>Lesiones o limitaciones <span class="muted">(opcional)</span><input name="injuries" value="${esc(p.injuries)}" placeholder="Ej.: molestia en hombro derecho"></label>`;
+  <label>Lesiones o limitaciones <span class="muted">(opcional)</span><input name="injuries" value="${esc(p.injuries)}" placeholder="Ej.: molestia en hombro derecho"></label>
+  <details class="marks" ${Object.values(p.marks || {}).some((v) => v > 0) ? 'open' : ''}><summary>¿Ya sabes cuánto levantas? <span class="muted">(opcional)</span></summary>
+    <p class="muted small">Tu máximo a 1 repetición, aproximado, en la unidad que elegiste arriba. Con esto los pesos sugeridos arrancan a tu nivel. Si no lo sabes, déjalo vacío: la app lo calcula en tu primer entreno.</p>
+    <div class="row3">${Object.entries(MARK_LIFTS).map(([k, l]) => `<label>${l}<input name="mk_${k}" type="text" inputmode="decimal" value="${p.marks?.[k] ? numStr(inUnit(p.marks[k], p.unit || 'kg')) : ''}"></label>`).join('')}</div>
+  </details>`;
 }
 
 function readProfile(form) {
   const fd = new FormData(form);
   const f = Object.fromEntries(fd);
   delete f.prio;
+  const unit = f.unit === 'lb' ? 'lb' : 'kg';
+  const marks = {};
+  for (const k of Object.keys(MARK_LIFTS)) { const v = parseNum(f[`mk_${k}`]); if (v > 0) marks[k] = fromUnit(v, unit); delete f[`mk_${k}`]; }
   const time = TIME_RANGES[f.time] ? f.time : '60-75';
-  return { ...f, unit: f.unit === 'lb' ? 'lb' : 'kg', equipment: 'gym', time, priorities: fd.getAll('prio').slice(0, 2), weight: parseNum(f.weight) || 0, height: Number(f.height) || '', age: Number(f.age) || '', days: Number(f.days), minutes: TIME_RANGES[time][1] };
+  return { ...f, marks, unit, equipment: 'gym', time, priorities: fd.getAll('prio').slice(0, 2), weight: parseNum(f.weight) || 0, height: Number(f.height) || '', age: Number(f.age) || '', days: Number(f.days), minutes: TIME_RANGES[time][1] };
 }
 
 function viewOnboarding() {
@@ -1094,7 +1101,7 @@ function viewPerfil() {
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
-  <p class="muted small center">${APP_NAME} v0.10${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center">${APP_NAME} v0.11${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -1193,7 +1200,8 @@ Object.assign(actions, {
     });
     const plan = db().plans.find((p) => p.id === a.planId);
     const def = plan?.days.flatMap((d) => d.exercises).find((x) => x.name === name);
-    const fresh = sessionExercise(def || a.exercises[i], def ? plan : null, def ? currentWeek(plan) : null, db().sessions);
+    const cur = a.exercises[i];
+    const fresh = sessionExercise(def || { ...cur.target, name: cur.name, muscle: cur.muscle, sec: cur.sec, kind: cur.kind, notes: cur.notes }, def ? plan : null, def ? currentWeek(plan) : null, db().sessions);
     update((st) => {
       const e = st.activeSession.exercises[i];
       const oldKg = e.target.kg;
@@ -1202,6 +1210,8 @@ Object.assign(actions, {
         e.sets.forEach((x) => { if (!x.done && (x.kg === '' || x.kg === oldKg)) x.kg = fresh.target.kg; });
         e.target.kg = fresh.target.kg;
       }
+      // Lo que quede escrito pasa al peso real más cercano en la nueva unidad (no 93,5 lb).
+      e.sets.forEach((x) => { if (!x.done && x.kg !== '' && Number(x.kg) > 0) x.kg = roundLoad(Number(x.kg), e, next); });
     });
     toast(`${name}: pesos en ${next === 'lb' ? 'libras' : 'kilos'}`);
     viewEntreno();
@@ -1398,11 +1408,23 @@ document.addEventListener('change', (e) => {
     update((st) => (st.settings[el.dataset.setting] = el.checked));
   } else if (el.dataset.bind) {
     // Inputs de series (entreno en curso)
+    const i = +el.dataset.ex, j = +el.dataset.set;
+    let copied = [];
     update((st) => {
-      const ex = st.activeSession.exercises[+el.dataset.ex];
+      const ex = st.activeSession.exercises[i];
       const n = parseNum(el.value);
-      ex.sets[+el.dataset.set][el.dataset.bind] = n == null ? '' : el.dataset.bind === 'kg' ? fromUnit(n, unitFor(ex.name)) : n;
+      const val = n == null ? '' : el.dataset.bind === 'kg' ? fromUnit(n, unitFor(ex.name)) : n;
+      const old = ex.sets[j][el.dataset.bind];
+      ex.sets[j][el.dataset.bind] = val;
+      // Como en las apps de gimnasio: el nuevo peso pasa a las series siguientes que seguían con el anterior.
+      if (el.dataset.bind === 'kg' && val !== '') {
+        ex.sets.forEach((s, k) => { if (k > j && !s.done && (s.kg === old || s.kg === '')) { s.kg = val; copied.push(k); } });
+      }
     });
+    for (const k of copied) {
+      const inp = document.querySelector(`input[data-bind="kg"][data-ex="${i}"][data-set="${k}"]`);
+      if (inp) inp.value = el.value.trim();
+    }
   } else if (el.dataset.draft && draft) {
     const [scope, field] = el.dataset.draft.split('.');
     const val = el.type === 'number' ? Number(el.value) : el.value;

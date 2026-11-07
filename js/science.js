@@ -242,6 +242,8 @@ function pick(pattern, variant, profile, used) {
     const easy = opts.filter((e) => !HARD.has(e.id));
     if (easy.length) opts = easy;
   }
+  const light = opts.filter((e) => !barTooHeavy(e, profile));
+  if (light.length) opts = light;
   const fresh = opts.filter((e) => !used.has(e.id));
   const pool = fresh.length ? fresh : opts;
   return pool[variant % pool.length];
@@ -394,20 +396,55 @@ const LEVEL_FACTOR = { principiante: 0.6, intermedio: 1, avanzado: 1.3 };
 export const perHand = (name) => PER_HAND.has(exerciseByName(name)?.id);
 
 // Devuelve el 1RM estimado para empezar, o null si no hay referencia (peso corporal o ejercicio propio).
-export function estimateStart1RM(profile, name) {
-  const ex = exerciseByName(name);
+// Marcas que la persona puede dar en su perfil (1RM aproximado, en kg).
+export const MARK_LIFTS = { banca: 'Press de banca', sentadilla: 'Sentadilla', militar: 'Press militar' };
+const byId = (id) => EXERCISES.find((e) => e.id === id);
+
+// 1RM típico según peso, nivel y sexo (sin marcas personales).
+function standard1RM(profile, id) {
   const bw = Number(profile?.weight);
-  if (!ex || !bw || !(ex.id in START_RATIO)) return null;
-  let r = START_RATIO[ex.id] * (LEVEL_FACTOR[profile.level] ?? 0.8);
+  const ex = byId(id);
+  // La fuerza no crece en línea recta con el peso corporal (la grasa no levanta):
+  // hasta 80 kg se usa tal cual; por encima, con un escalado más suave.
+  const eff = bw <= 80 ? bw : 80 * (bw / 80) ** 0.67;
+  let r = START_RATIO[id] * (LEVEL_FACTOR[profile.level] ?? 0.8);
   // Referencias promedio: mujer ≈ 55 % (tren superior) y 75 % (inferior) del hombre.
   // Sin sexo indicado, el punto medio: mejor empezar liviano que pasarse.
   if (profile.sex === 'mujer') r *= UPPER.has(ex.muscle) ? 0.55 : 0.75;
   else if (profile.sex !== 'hombre') r *= UPPER.has(ex.muscle) ? 0.775 : 0.875;
-  return bw * r * 0.9; // 10 % por debajo: mejor empezar fácil y subir
+  return eff * r;
 }
 
-// e1RM estimado (Epley). Válido sobre todo entre 1 y 12 repeticiones.
-export const e1rm = (kg, reps) => (kg > 0 && reps > 0 ? kg * (1 + Math.min(reps, 12) / 30) : 0);
+export function estimateStart1RM(profile, name) {
+  const ex = exerciseByName(name);
+  const bw = Number(profile?.weight);
+  if (!ex || !bw || !(ex.id in START_RATIO)) return null;
+  const marks = profile.marks || {};
+  const has = Object.values(marks).some((v) => v > 0);
+  if (marks[ex.id] > 0) return marks[ex.id] * 0.95;
+  // Con marcas: qué tan fuerte es la persona frente a la referencia, por tren superior e inferior.
+  const factor = (ids) => { const f = ids.filter((k) => marks[k] > 0).map((k) => marks[k] / standard1RM(profile, k)); return f.length ? f.reduce((a, b) => a + b) / f.length : null; };
+  const upper = UPPER.has(ex.muscle);
+  let f = upper ? factor(['banca', 'militar']) : factor(['sentadilla']);
+  if (f == null) { const other = upper ? factor(['sentadilla']) : factor(['banca', 'militar']); f = other == null ? 1 : Math.sqrt(other); }
+  f = Math.min(Math.max(f, 0.4), 2.5);
+  return standard1RM(profile, ex.id) * f * (has ? 0.95 : 0.9); // por debajo: mejor empezar fácil y subir
+}
+
+// Peso mínimo físico de los ejercicios con barra (la barra sola). Barras livianas (EZ) de 10 kg.
+const LIGHT_BAR_IDS = new Set(['curl_barra', 'frances', 'curl_predicador']);
+export const barMinKg = (ex) => (ex?.equip === 'barra' ? (LIGHT_BAR_IDS.has(ex.id) ? 10 : 20) : 0);
+// ¿La barra sola ya pesa bastante más de lo que la persona podría mover en una serie de ~10?
+function barTooHeavy(ex, profile) {
+  if (ex.equip !== 'barra' || !profile?.weight) return false;
+  const est = estimateStart1RM(profile, ex.name);
+  return !!est && est / repsFactor(12) < barMinKg(ex) * 0.8;
+}
+
+// e1RM estimado (Epley). repsFactor es la MISMA fórmula para medir y para prescribir
+// (si no coinciden, quien cumple exacto sale "por debajo"). Por encima de 20 reps deja de ser fiable.
+export const repsFactor = (reps) => 1 + Math.min(Math.max(Number(reps) || 0, 0), 20) / 30;
+export const e1rm = (kg, reps) => (kg > 0 && reps > 0 ? kg * repsFactor(reps) : 0);
 
 export function lastPerformance(sessions, name) {
   for (let i = sessions.length - 1; i >= 0; i--) {
@@ -434,7 +471,9 @@ export function suggestion(sessions, target, name, unit = 'kg') {
   const inc = incKg && unit === 'lb' ? 5 * LB : incKg;
   if (allMax) {
     if (!inc) return { kg: topKg, text: `Completaste el rango. Hazlo más difícil (más lento, pausa o lastre) y vuelve a ${target.repMin} reps.` };
-    const next = Math.round((topKg + inc) * 1000) / 1000;
+    const next = unit === 'lb'
+      ? Math.round(((Math.round(topKg / LB / 5) * 5 + 5) * LB) * 1000) / 1000
+      : Math.round((topKg + inc) * 1000) / 1000;
     return { kg: next, text: `¡Subes peso! ${show(topKg)} → ${show(next)}, vuelve a ${target.repMin} reps.` };
   }
   const best = Math.max(...atTop.map((s) => Number(s.reps)));

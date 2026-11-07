@@ -439,3 +439,9 @@ button.chip { border: 1px solid var(--line); cursor: pointer; text-transform: no
 .tour .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .firsttips ul { margin: 6px 0 12px; padding-left: 18px; }
 .firsttips li { margin-bottom: 6px; }
+
+/* Marcas personales (opcional) en el perfil */
+.row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.row3 label { font-size: 13px; }
+details.marks { margin: 4px 0 12px; }
+details.marks summary { cursor: pointer; font-weight: 600; color: var(--ink-2); padding: 6px 0; }
