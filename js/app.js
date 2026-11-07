@@ -1,4 +1,4 @@
-import { db, update, uid, today, activePlan, exportJSON, importJSON, resetAll, requestPersistence } from './db.js';
+import { db, update, uid, today, activePlan, exportJSON, importJSON, parseBackup, resetAll, requestPersistence } from './db.js';
 import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, PRIORITIES, exerciseDefaults, TIME_RANGES, timeRangeOf, timeLabel, estimateMinutes, generatePlan, SPLIT_OPTIONS, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName, MARK_LIFTS } from './science.js';
 import { lineChart, volumeBars } from './charts.js';
 import { reviewRoutine, applyFix } from './routine.js';
@@ -1101,7 +1101,7 @@ function viewPerfil() {
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
-  <p class="muted small center">${APP_NAME} v0.11${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center">${APP_NAME} v0.12${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -1135,7 +1135,10 @@ function viewPerfil() {
   $('#imp').addEventListener('change', async (e) => {
     const f = e.target.files[0];
     if (!f) return;
-    try { importJSON(await f.text()); toast('Respaldo importado'); render(); } catch (err) { alert('No se pudo importar: ' + err.message); }
+    const text = await f.text();
+    try { parseBackup(text); } catch (err) { alert('No se pudo importar: ' + err.message); return; }
+    if (!confirm(cloud.user ? 'Se cargarán los datos del respaldo y se juntarán con los de tu cuenta. ¿Continuar?' : 'Los datos del respaldo reemplazarán los de este celular. ¿Continuar?')) return;
+    try { importJSON(text); toast('Respaldo importado'); render(); } catch (err) { alert('No se pudo importar: ' + err.message); }
   });
   if (acc) cloud.usage().then((u) => {
     const el = $('#usage');
@@ -1375,7 +1378,9 @@ Las series que ya marcaste se conservan.`)) {
   },
   reset: () => {
     if (!(confirm(`Esto borra TODOS tus datos de entrenamiento${cloud.user ? ' de este celular y de tu cuenta' : ' de este celular'}. ¿Seguro?`) && confirm('Última confirmación: ¿borrar todo?'))) return;
-    resetAll(!!cloud.user); draft = null; location.hash = ''; render();
+    resetAll(!!cloud.user); draft = null; try { localStorage.removeItem(DRAFT_KEY); } catch {}
+    cloud.clearActivity(); // también lo publicado en el feed de tus amigos
+    location.hash = ''; render();
   },
   demoReset: async () => {
     if (!confirm('¿Borrar la cuenta de prueba y empezar desde cero?')) return;
@@ -1385,8 +1390,14 @@ Las series que ya marcaste se conservan.`)) {
   },
   logout: async () => {
     if (db().activeSession && !confirm('Tienes un entreno en curso. ¿Cerrar sesión igual?')) return;
+    // Antes de borrar los datos del celular, que todo esté en la nube.
+    if (cloud.hasUnsynced()) {
+      await cloud.flush();
+      if (cloud.hasUnsynced() && !confirm('Hay cambios que todavía no se han subido a tu cuenta (¿estás sin conexión?). Si cierras sesión ahora, se pierden. ¿Cerrar sesión igual?')) return;
+    }
     await cloud.signOut();
     resetAll(false);
+    draft = null; try { localStorage.removeItem(DRAFT_KEY); } catch {}
     location.hash = '';
     render();
   },
@@ -1444,7 +1455,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 
 async function afterLogin() {
   await cloud.syncOnLogin({
-    askAdoptLocal: async () => confirm('Este celular tiene entrenos guardados sin cuenta. ¿Quieres pasarlos a tu cuenta? (Si cancelas, se usarán los datos que ya tienes en la nube.)'),
+    askAdoptLocal: async () => confirm('Este celular tiene entrenos guardados sin cuenta. ¿Quieres pasarlos a tu cuenta? Se juntan con lo que ya tienes en la nube. (Si cancelas, se usan solo los datos de la nube.)'),
   });
   await consumeInvite();
 }
@@ -1458,7 +1469,8 @@ cloud.onAuthChange(async (u, reason) => {
   main.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   try {
     const u = await cloud.init();
-    if (u) await afterLogin();
+    if (u && !u.offline) await afterLogin();
+    else if (u?.offline) toast('Sin conexión: tus cambios se guardan en este celular y se suben al volver la señal.');
   } catch (e) {
     console.error(e);
     toast('Sin conexión con la nube: usando los datos de este celular.');

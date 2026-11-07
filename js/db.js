@@ -32,20 +32,24 @@ function normalize(raw) {
 }
 
 function load() {
+  let raw = null;
   try {
-    const raw = localStorage.getItem(KEY);
+    raw = localStorage.getItem(KEY);
     return raw ? normalize(JSON.parse(raw)) : empty();
   } catch {
+    // Datos dañados: se guarda una copia antes de empezar de cero, para poder recuperarlos.
+    try { if (raw) localStorage.setItem(`${KEY}.dañado`, raw); } catch {}
     return empty();
   }
 }
 
+let warnedFull = false;
 function persist() {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
   } catch (e) {
     console.error('No se pudo guardar', e);
-    alert('No se pudo guardar en el dispositivo. Exporta un respaldo desde Perfil.');
+    if (!warnedFull) { warnedFull = true; alert('No se pudo guardar en el celular (¿sin espacio?). Exporta un respaldo desde Perfil.'); }
   }
 }
 
@@ -82,20 +86,31 @@ export function activePlan() {
   return state.plans.find((p) => p.id === state.activePlanId) || null;
 }
 
-// Datos que se suben a la nube (sin metadatos del dispositivo).
+// Datos que se suben a la nube: sin metadatos del celular ni el entreno en curso
+// (ese vive solo en el celular donde se está haciendo; al terminarlo pasa a "sessions").
 export function cloudData() {
-  const { owner, outbox, ...rest } = state;
+  const { owner, outbox, activeSession, ...rest } = state;
   return rest;
 }
 
 export function exportJSON() {
-  return JSON.stringify(cloudData(), null, 2);
+  return JSON.stringify({ ...cloudData(), activeSession: null }, null, 2);
 }
 
+// Revisa que un respaldo tenga la forma correcta antes de usarlo.
+export function parseBackup(text) {
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error('el archivo no es un respaldo de Lift'); }
+  const arr = (k) => data?.[k] === undefined || Array.isArray(data[k]);
+  if (!data || typeof data !== 'object' || !Array.isArray(data.sessions) || !arr('plans') || !arr('weights')) throw new Error('el archivo no es un respaldo de Lift');
+  if (data.profile != null && typeof data.profile !== 'object') throw new Error('el perfil del respaldo está dañado');
+  return data;
+}
+
+// Importa un respaldo. Conserva el entreno en curso y la cuenta; con cuenta, la nube lo mezcla con lo que ya hay.
 export function importJSON(text) {
-  const data = JSON.parse(text);
-  if (!data || typeof data !== 'object' || !('sessions' in data)) throw new Error('Archivo no válido');
-  state = normalize({ ...data, owner: state.owner });
+  const data = parseBackup(text);
+  state = normalize({ ...data, owner: state.owner, activeSession: state.activeSession, outbox: state.outbox });
   save();
 }
 

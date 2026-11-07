@@ -3,6 +3,7 @@
 
 import { SUPABASE_URL, SUPABASE_ANON_KEY, DEMO } from './config.js';
 import { db, onChange, replaceState, cloudData, update } from './db.js';
+import { mergeDocs, hashOf, baseOf, strip } from './sync.js';
 
 const SDK = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/+esm';
 
@@ -58,6 +59,7 @@ async function supabaseBackend() {
       return must(await q);
     },
     async publish(id, kind, payload) { must(await sb.from('activity').insert({ user_id: id, kind, payload })); },
+    async clearActivity(id) { must(await sb.from('activity').delete().eq('user_id', id)); },
     async feedback(f) { must(await sb.from('feedback').insert(f)); },
     async cheer(activityId, on) {
       const me = await uidNow();
@@ -101,22 +103,51 @@ function translate(msg = '') {
 const authListeners = new Set();
 export const onAuthChange = (fn) => authListeners.add(fn);
 
-export async function init() {
-  if (!enabled) return null;
+async function connect() {
+  if (api) return;
   api = mockMode ? (await import('./mock.js')).mockBackend() : await supabaseBackend();
-  const u = await api.session();
-  if (u) await setUser(u);
   api.onAuth(async (nu) => {
-    if ((nu?.id || null) === (user?.id || null)) return;
+    if ((nu?.id || null) === (user?.id || null) && !user?.offline) return;
     if (nu) await setUser(nu); else { user = null; me = null; }
     authListeners.forEach((fn) => fn(user));
   });
+}
+
+export async function init() {
+  if (!enabled) return null;
+  let failed = false;
+  try {
+    await connect();
+    const u = await api.session();
+    if (u) await setUser(u);
+  } catch (e) { console.warn('Sin conexión con la nube', e); failed = true; }
+  // Sin señal (o la sesión no se pudo renovar sin internet): se entra igual con los datos de este celular.
+  if (!user && db().owner && (failed || !navigator.onLine)) goOffline();
   return user;
+}
+
+// Modo sin conexión: la cuenta es la dueña de los datos del celular; se sincroniza al volver la señal.
+function goOffline() {
+  user = { id: db().owner, email: '', offline: true };
+  me = cachedMe() || { id: db().owner, username: '', display_name: db().profile?.name || '', username_confirmed: true };
+}
+export const isOffline = () => !!user?.offline;
+const ME_KEY = 'forja.me';
+const cachedMe = () => { try { const m = JSON.parse(localStorage.getItem(ME_KEY) || 'null'); return m?.id === db().owner ? m : null; } catch { return null; } };
+
+async function reconnect() {
+  try {
+    await connect();
+    const u = await api.session();
+    if (u) { await setUser(u); authListeners.forEach((fn) => fn(user)); }
+    else { user = null; me = null; authListeners.forEach((fn) => fn(null)); } // hay que volver a entrar; los datos siguen en el celular
+  } catch { /* sigue sin conexión */ }
 }
 
 async function setUser(u) {
   user = { id: u.id, email: u.email };
-  try { me = await api.profile(u.id); } catch { me = { id: u.id, username: '', display_name: '', username_confirmed: true }; }
+  try { me = await api.profile(u.id); localStorage.setItem(ME_KEY, JSON.stringify(me)); }
+  catch { me = (cachedMe()?.id === u.id && cachedMe()) || { id: u.id, username: '', display_name: '', username_confirmed: true }; }
   try { me.invite_code = await api.inviteCode(); } catch { /* sin código: el enlace usa el @usuario */ }
 }
 
@@ -125,27 +156,50 @@ export async function signIn(f) { const u = await api.signIn(f); await setUser(u
 export async function signInWithGoogle() { const u = await api.signInWithGoogle(); if (u) await setUser(u); return u; }
 export async function confirmUsername(username, displayName) { await api.confirmUsername(user.id, username, displayName); me = { ...me, username: username.toLowerCase(), display_name: displayName, username_confirmed: true }; }
 export const needsUsername = () => !!user && me?.username_confirmed === false;
-export async function signOut() { await flush(); await api.signOut(); user = null; me = null; }
+export async function signOut() { await flush().catch(() => {}); if (!user?.offline) await api.signOut(); user = null; me = null; try { localStorage.removeItem(BASE_KEY); localStorage.removeItem(ME_KEY); } catch {} }
 export const resetPassword = (email) => api.resetPassword(email);
 export const usernameAvailable = (u) => api.usernameAvailable(u);
 export async function updateDisplayName(name) { await api.updateProfile(user.id, { display_name: name }); me.display_name = name; }
 
 // ---------- Sincronización ----------
-// Gana la copia modificada más recientemente (dispositivo o nube).
-export async function syncOnLogin({ askAdoptLocal }) {
+// Las copias del celular y de la nube se MEZCLAN (ver sync.js): nada se pierde por usar dos aparatos
+// o por entrenar sin señal. "Base" = lo último que este celular sincronizó con éxito.
+const BASE_KEY = 'forja.syncbase';
+function loadBase(uid) { try { const b = JSON.parse(localStorage.getItem(BASE_KEY) || 'null'); return b?.user === uid ? b : null; } catch { return null; } }
+function saveBase(uid, doc) { try { localStorage.setItem(BASE_KEY, JSON.stringify({ user: uid, ...baseOf(doc) })); } catch {} }
+export const hasUnsynced = () => !!user && db().owner === user.id && hashOf(cloudData()) !== loadBase(user.id)?.hash;
+
+// Trae la nube, mezcla con lo local y sube el resultado si hace falta. Devuelve true si cambió lo local.
+async function syncNow() {
   const remote = await api.pull(user.id);
+  const rdata = strip(remote?.data || {});
+  const local = cloudData();
+  const merged = mergeDocs(local, rdata, loadBase(user.id));
+  const mh = hashOf(merged);
+  const changedLocal = mh !== hashOf(local);
+  if (changedLocal) { const s = db(); replaceState({ ...merged, activeSession: s.activeSession, outbox: s.outbox }, user.id); }
+  if (mh !== hashOf(rdata) || !remote) await api.push(user.id, merged);
+  saveBase(user.id, merged);
+  return changedLocal;
+}
+
+export async function syncOnLogin({ askAdoptLocal }) {
   const local = db();
-  const remoteAt = remote?.data?.updatedAt || 0;
   if (local.owner === user.id) {
-    if (remoteAt > local.updatedAt) replaceState(remote.data, user.id);
-    else if (local.updatedAt > remoteAt) await api.push(user.id, cloudData());
-  } else if (!local.owner && local.profile && (!remote || !remote.data?.profile || (await askAdoptLocal()))) {
-    // Datos creados en este dispositivo antes de tener cuenta: pasan a la cuenta.
-    update((s) => (s.owner = user.id));
-    await api.push(user.id, cloudData());
+    await syncNow();
   } else {
-    replaceState(remote?.data || {}, user.id);
+    const remote = await api.pull(user.id);
+    if (!local.owner && local.profile && (!remote?.data?.profile || (await askAdoptLocal()))) {
+      // Datos creados en este celular antes de tener cuenta: se juntan con los de la cuenta.
+      update((s) => (s.owner = user.id));
+      await syncNow();
+    } else {
+      // Otra cuenta usó este celular antes, o no hay nada local: se usan los datos de la nube.
+      replaceState({ ...strip(remote?.data || {}), activeSession: null, outbox: [] }, user.id);
+      saveBase(user.id, cloudData());
+    }
   }
+  await flushOutbox();
 }
 
 let timer = null;
@@ -153,12 +207,16 @@ let pushing = false;
 export const syncState = { status: 'idle', at: 0 };
 
 async function pushNow() {
-  if (!user || db().owner !== user.id) return;
+  if (!user || user.offline || db().owner !== user.id) return;
   if (!navigator.onLine) { syncState.status = 'offline'; return; }
   if (pushing) { schedule(); return; }
   pushing = true;
   try {
-    await api.push(user.id, cloudData());
+    // Si nada de lo que va a la nube cambió (p. ej. marcar series del entreno en curso), no se sube nada.
+    if (hasUnsynced()) {
+      const changed = await syncNow();
+      if (changed) authListeners.forEach((fn) => fn(user, 'pulled'));
+    }
     syncState.status = 'ok'; syncState.at = Date.now();
     await flushOutbox();
   } catch (e) {
@@ -169,19 +227,20 @@ async function pushNow() {
 const schedule = () => { clearTimeout(timer); timer = setTimeout(pushNow, 1500); };
 export async function flush() { clearTimeout(timer); await pushNow(); }
 
-onChange(() => { if (enabled && user) schedule(); });
-window.addEventListener('online', () => user && pushNow());
-// Al volver a la app, trae cambios hechos en otro dispositivo.
+onChange(() => { if (enabled && user && !user.offline) schedule(); });
+window.addEventListener('online', () => { if (user?.offline) reconnect(); else if (user) pushNow(); });
+// Al volver a la app, trae (y mezcla) cambios hechos en otro aparato.
 document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState !== 'visible' || !user || !navigator.onLine) return;
-  try {
-    const remote = await api.pull(user.id);
-    if ((remote?.data?.updatedAt || 0) > db().updatedAt && !db().activeSession) {
-      replaceState(remote.data, user.id);
-      authListeners.forEach((fn) => fn(user, 'pulled'));
-    }
-  } catch {}
+  if (document.visibilityState !== 'visible' || !user || user.offline || !navigator.onLine || pushing || db().owner !== user.id) return;
+  pushing = true;
+  try { if (await syncNow()) authListeners.forEach((fn) => fn(user, 'pulled')); } catch {} finally { pushing = false; }
 });
+
+// "Borrar mis datos": también se quita lo publicado en el feed de los amigos.
+export async function clearActivity() {
+  if (!user || user.offline) return;
+  try { await api.clearActivity(user.id); } catch (e) { console.warn(e); }
+}
 
 // ---------- Actividad ----------
 export function publish(kind, payload) {
