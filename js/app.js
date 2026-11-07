@@ -37,6 +37,7 @@ function render() {
   if (!COACH_ENABLED && (route === 'coach' || route === 'crear')) { location.replace('#hoy'); return; }
   (routes[route] || viewHoy)();
   addProfileButton(route);
+  if (route === 'hoy' && s.plans.length && !s.settings.tourDone && !s.activeSession && !modalOpen()) openTour(0);
   const coachTab = document.querySelector('.nav a[href="#coach"]');
   if (coachTab) coachTab.hidden = !COACH_ENABLED;
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('on', a.getAttribute('href') === '#' + route));
@@ -136,6 +137,37 @@ function generateSciencePlan() {
   cloud.publish('plan', { planName: plan.name, days: plan.days.length, source: plan.source });
   toast('Plan de 12 semanas creado');
   return plan;
+}
+
+// ---------- Guía rápida (sale una vez; se puede volver a ver desde Perfil) ----------
+function tourSteps() {
+  const ai = ADJUST_ENABLED && cloud.enabled;
+  return [
+    { tab: 'hoy', icon: '🏋️', title: 'Hoy', text: 'Aquí está el entreno que te toca, con el peso sugerido para cada ejercicio. Tocas <b>Empezar</b> y la app te lleva serie por serie, con el descanso cronometrado.' },
+    { tab: 'rutinas', icon: '📋', title: 'Rutina', text: `Tus días y ejercicios. Puedes editarlos, elegir cómo progresar o importar otra rutina desde un PDF o fotos.${ai ? ' ¿No te gusta algo? Toca <b>Pídenos cambios</b> y la IA la ajusta.' : ''}` },
+    cloud.enabled && { tab: 'amigos', icon: '🤝', title: 'Amigos', text: 'Invita a tu parche con tu link. Ves sus entrenos y récords, y les das <b>fuerzas</b> 💪 cuando entrenan.' },
+    { tab: 'progreso', icon: '📈', title: 'Progreso', text: 'Tus récords, tu peso corporal y cómo vas subiendo en cada ejercicio, semana a semana.' },
+  ].filter(Boolean);
+}
+function openTour(i = 0) {
+  const steps = tourSteps();
+  const st = steps[i], last = i === steps.length - 1;
+  const tabs = [...document.querySelectorAll('.nav a')].filter((a) => !a.hidden)
+    .map((a) => `<span class="${a.getAttribute('href') === '#' + st.tab ? 'on' : ''}">${a.innerHTML}</span>`).join('');
+  openModal(`<div class="tour">
+    <p class="eyebrow">Guía rápida · ${i + 1} de ${steps.length}</p>
+    <div class="tourico" aria-hidden="true">${st.icon}</div>
+    <h2>${st.title}</h2>
+    <p>${st.text}</p>
+    <p class="muted small">Lo encuentras en la barra de abajo:</p>
+    <div class="tournav" aria-hidden="true">${tabs}</div>
+    ${last ? `<p class="small tourme">${avatar(cloud.me?.display_name || db().profile?.name)}<span>Arriba a la derecha está tu <b>Perfil</b>: ahí cambias kg o lb, invitas amigos y puedes ver esta guía otra vez.</span></p>` : ''}
+    <div class="dots" aria-hidden="true">${steps.map((_, k) => `<span class="${k === i ? 'on' : ''}"></span>`).join('')}</div>
+    <div class="actions">
+      ${i > 0 ? `<button class="btn ghost" data-act="tourGo" data-i="${i - 1}">Atrás</button>` : '<button class="btn ghost" data-act="tourEnd">Saltar</button>'}
+      ${last ? '<button class="btn primary" data-act="tourEnd">¡A entrenar!</button>' : `<button class="btn primary" data-act="tourGo" data-i="${i + 1}">Siguiente</button>`}
+    </div>
+  </div>`, false);
 }
 
 // ---------- Hoy ----------
@@ -284,7 +316,7 @@ function viewEntreno() {
   <header class="top"><div><p class="eyebrow">${a.week ? `Semana ${a.week} · ` : ''}En curso · <span id="elapsed"></span></p><h1>${esc(a.dayName)}</h1></div>
     <button class="btn ghost sm" data-act="cancelSession">Descartar</button></header>
   <div class="progress"><span style="width:${total ? (done / total) * 100 : 0}%"></span></div>
-  ${lock.canNotify() && Notification.permission === 'default' && !s.settings.notifyAsked ? `<section class="card tipcard"><p class="small"><b>🔒 Descanso con el celular bloqueado.</b> El descanso se ve en la pantalla de bloqueo (en el panel de "reproduciendo ahora"). ¿Te avisamos con una notificación cuando termine?</p>
+  ${!s.settings.workoutTipsDone ? firstWorkoutTips(s) : lock.canNotify() && Notification.permission === 'default' && !s.settings.notifyAsked ? `<section class="card tipcard"><p class="small"><b>🔒 Descanso con el celular bloqueado.</b> El descanso se ve en la pantalla de bloqueo (en el panel de "reproduciendo ahora"). ¿Te avisamos con una notificación cuando termine?</p>
     <div class="actions wrap"><button class="btn primary sm" data-act="enableNotify">Sí, avisarme</button><button class="btn ghost sm" data-act="skipNotify">Ahora no</button></div></section>` : ''}
   ${a.exercises.map((e, i) => exerciseCard(e, i, s)).join('')}
   <button class="btn ghost big" data-act="pickForSession">+ Añadir ejercicio</button>
@@ -292,6 +324,22 @@ function viewEntreno() {
   <button class="btn primary big" data-act="finish">Terminar entreno</button>`;
   $('#snotes').addEventListener('change', (ev) => update((st) => (st.activeSession.notes = ev.target.value)));
   tickElapsed();
+}
+
+function firstWorkoutTips(s) {
+  const u = s.profile?.unit === 'lb' ? 'lb' : 'kg';
+  const other = u === 'lb' ? 'kilos' : 'libras';
+  return `<section class="card tipcard firsttips">
+    <p class="eyebrow">Así funciona el entreno</p>
+    <ul class="small">
+      <li><b>Toca ✓ al terminar cada serie.</b> Arranca el descanso solo y te avisa cuando acabe.</li>
+      <li><b>El peso sugerido ya viene puesto.</b> Si hiciste lo que dice, solo toca ✓. Si no, escribe tu peso y tus reps antes.</li>
+      <li><b>RIR</b> son las reps que te quedaron en reserva: cuántas más podías hacer.</li>
+      <li><b>¿Máquina ocupada?</b> Toca <b>⇄ Cambiar ejercicio</b> y elige otro para el mismo músculo.</li>
+      <li><b>¿Esa máquina está en ${other}?</b> Toca <b>${u} ⇄</b> en el ejercicio y cambia la unidad solo para ese.</li>
+    </ul>
+    <button class="btn primary sm" data-act="tipsDone">Entendido</button>
+  </section>`;
 }
 
 function exerciseCard(e, i, s) {
@@ -1040,11 +1088,12 @@ function viewPerfil() {
       <button class="btn ghost sm danger" data-act="reset">Borrar mis datos</button>
     </div>
   </section>
+  <button class="btn ghost big" data-act="tour">🧭 Ver la guía rápida otra vez</button>
   ${acc ? '<button class="btn ghost big" data-act="feedback">💬 Enviar comentario o idea</button>' : ''}
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
-  <p class="muted small center">${APP_NAME} v0.9${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center">${APP_NAME} v0.10${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -1167,6 +1216,10 @@ Object.assign(actions, {
   cancelSession: () => { if (confirm('¿Descartar este entreno? No se guardará.')) { update((st) => (st.activeSession = null)); stopRest(); lock.stop(); go('hoy'); } },
   enableNotify: async () => { const ok = await lock.askNotify(); update((st) => (st.settings.notifyAsked = true)); toast(ok ? 'Listo: te avisamos cuando termine el descanso' : 'Sin permiso de notificaciones: puedes activarlo en los ajustes del celular'); render(); },
   skipNotify: () => { update((st) => (st.settings.notifyAsked = true)); render(); },
+  tourGo: (el) => openTour(+el.dataset.i),
+  tourEnd: () => { update((st) => (st.settings.tourDone = true)); closeModal(); },
+  tour: () => openTour(0),
+  tipsDone: () => { update((st) => (st.settings.workoutTipsDone = true)); render(); },
   restAdd: () => { if (restTimer) { restTimer.end += 30000; restTimer.total += 30; renderRestBar(); } },
   restStop: () => stopRest(),
 
