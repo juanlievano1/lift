@@ -399,7 +399,10 @@ export function estimateStart1RM(profile, name) {
   const bw = Number(profile?.weight);
   if (!ex || !bw || !(ex.id in START_RATIO)) return null;
   let r = START_RATIO[ex.id] * (LEVEL_FACTOR[profile.level] ?? 0.8);
+  // Referencias promedio: mujer ≈ 55 % (tren superior) y 75 % (inferior) del hombre.
+  // Sin sexo indicado, el punto medio: mejor empezar liviano que pasarse.
   if (profile.sex === 'mujer') r *= UPPER.has(ex.muscle) ? 0.55 : 0.75;
+  else if (profile.sex !== 'hombre') r *= UPPER.has(ex.muscle) ? 0.775 : 0.875;
   return bw * r * 0.9; // 10 % por debajo: mejor empezar fácil y subir
 }
 
