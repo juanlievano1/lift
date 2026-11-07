@@ -586,8 +586,17 @@ function shareSession(session) {
 function startRest(sec, ctx = {}) {
   restTimer = { end: Date.now() + sec * 1000, total: sec, ...ctx };
   renderRestBar();
+  // Aviso del servidor al terminar (llega aunque el celular esté bloqueado y sin pausar la música).
+  cloud.scheduleRestPush(restTimer.end, restTimer.next);
 }
-function stopRest() { restTimer = null; renderRestBar(); lockIdle(); }
+function stopRest() { restTimer = null; renderRestBar(); lockIdle(); lock.clearRestInfo(); cloud.cancelRestPush(); }
+// Al bloquear el celular o salir de la app durante el descanso: aviso con la hora a la que termina.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && restTimer) {
+    const at = new Date(restTimer.end).toLocaleTimeString('es', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    lock.restInfo(`Descanso hasta las ${at}`, restTimer.next || 'Lift te avisa cuando termine');
+  } else if (document.visibilityState === 'visible') lock.clearRestInfo();
+});
 // Panel del celular entre descansos: "Entrenando · Torso A".
 function lockIdle() {
   const a = db().activeSession;
@@ -615,7 +624,9 @@ function renderRestBar() {
   if (left === 0) {
     try { navigator.vibrate?.([200, 100, 200]); } catch {}
     beep();
-    lock.notify('¡Vamos con la siguiente serie!', restTimer.next || 'Terminó tu descanso');
+    // Con la app a la vista no hace falta el aviso del servidor; si está oculta, avisa el servidor (o el celular, si no hay push).
+    if (document.visibilityState === 'visible') cloud.cancelRestPush();
+    else if (!cloud.pushActive()) lock.notify('¡Vamos con la siguiente serie!', restTimer.next || 'Terminó tu descanso');
     setTimeout(lockIdle, 1500);
     toast('¡Vamos con la siguiente serie!');
     restTimer = null;
@@ -1197,7 +1208,7 @@ function viewPerfil() {
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
-  <p class="muted small center">${APP_NAME} v0.16${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center">${APP_NAME} v0.17${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -1349,13 +1360,13 @@ Object.assign(actions, {
   }),
   finish: () => finishSession(),
   cancelSession: () => { if (confirm('¿Descartar este entreno? No se guardará.')) { update((st) => (st.activeSession = null)); stopRest(); lock.stop(); go('hoy'); } },
-  enableNotify: async () => { const ok = await lock.askNotify(); update((st) => (st.settings.notifyAsked = true)); toast(ok ? 'Listo: te avisamos cuando termine el descanso' : 'Sin permiso de notificaciones: puedes activarlo en los ajustes del celular'); render(); },
+  enableNotify: async () => { const ok = await lock.askNotify(); if (ok) await cloud.enablePush(); update((st) => (st.settings.notifyAsked = true)); toast(ok ? 'Listo: te avisamos cuando termine el descanso' : 'Sin permiso de notificaciones: puedes activarlo en los ajustes del celular'); render(); },
   skipNotify: () => { update((st) => (st.settings.notifyAsked = true)); render(); },
   tourGo: (el) => openTour(+el.dataset.i),
   tourEnd: () => { update((st) => (st.settings.tourDone = true)); closeModal(); },
   tour: () => openTour(0),
   tipsDone: () => { update((st) => (st.settings.workoutTipsDone = true)); render(); },
-  restAdd: () => { if (restTimer) { restTimer.end += 30000; restTimer.total += 30; renderRestBar(); } },
+  restAdd: () => { if (restTimer) { restTimer.end += 30000; restTimer.total += 30; renderRestBar(); cloud.scheduleRestPush(restTimer.end, restTimer.next); } },
   restStop: () => stopRest(),
 
   feedback: () => {
@@ -1372,7 +1383,7 @@ Object.assign(actions, {
     if (!msg) { err.textContent = 'Escribe tu comentario antes de enviar.'; err.hidden = false; return; }
     el.disabled = true; el.textContent = 'Enviando…';
     try {
-      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.16' });
+      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.17' });
       closeModal(); toast('¡Gracias! Comentario enviado');
     } catch (ex) { err.textContent = ex.message; err.hidden = false; el.disabled = false; el.textContent = 'Enviar'; }
   },

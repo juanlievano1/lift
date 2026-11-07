@@ -18,3 +18,6 @@ export const COACH_ENABLED = false;
 // "¿No te gusta algo? Pídenos cambios": ajusta la rutina con IA (acción "adjust" de la función coach).
 // Se enciende cuando la función con esa acción está desplegada en Supabase.
 export const ADJUST_ENABLED = true;
+// Llave pública para las notificaciones push (aviso de fin de descanso). Es pública por diseño;
+// la privada vive solo en el servidor (secreto de la función rest-push).
+export const VAPID_PUBLIC_KEY = 'BLUx92lnFd9n83Udm0kU7COBEroqOHVO6EVmY5ML62-IXiHHBK2HEBVTG0vs__6qn7CoIs3LGVMVSFeZvDfQTvg';

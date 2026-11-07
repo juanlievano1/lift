@@ -1,7 +1,7 @@
 // Nube de la app: cuentas, sincronización, amigos, actividad y coach.
 // Usa Supabase si está configurado; en modo prueba (?mock=1) usa un servidor simulado en el navegador.
 
-import { SUPABASE_URL, SUPABASE_ANON_KEY, DEMO } from './config.js';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, DEMO, VAPID_PUBLIC_KEY } from './config.js';
 import { db, onChange, replaceState, cloudData, update } from './db.js';
 import { mergeDocs, hashOf, baseOf, strip } from './sync.js';
 
@@ -67,6 +67,9 @@ async function supabaseBackend() {
     },
     async shareRoutine(id, data) { must(await sb.from('shared_routines').upsert({ user_id: id, data, updated_at: new Date().toISOString() })); },
     async unshareRoutine(id) { must(await sb.from('shared_routines').delete().eq('user_id', id)); },
+    async savePush(s) { must(await sb.rpc('save_push_subscription', { p_endpoint: s.endpoint, p_p256dh: s.p256dh, p_auth: s.auth })); },
+    async restTimer(id, endsAt, next) { must(await sb.from('rest_timers').upsert({ user_id: id, ends_at: endsAt, next, sent: false, updated_at: new Date().toISOString() })); },
+    async cancelRest(id) { must(await sb.from('rest_timers').delete().eq('user_id', id)); },
     async feedback(f) { must(await sb.from('feedback').insert(f)); },
     async cheer(activityId, on) {
       const me = await uidNow();
@@ -163,7 +166,7 @@ export async function signIn(f) { const u = await api.signIn(f); await setUser(u
 export async function signInWithGoogle() { const u = await api.signInWithGoogle(); if (u) await setUser(u); return u; }
 export async function confirmUsername(username, displayName) { await api.confirmUsername(user.id, username, displayName); me = { ...me, username: username.toLowerCase(), display_name: displayName, username_confirmed: true }; }
 export const needsUsername = () => !!user && me?.username_confirmed === false;
-export async function signOut() { await flush().catch(() => {}); if (!user?.offline) await api.signOut(); user = null; me = null; try { localStorage.removeItem(BASE_KEY); localStorage.removeItem(ME_KEY); localStorage.removeItem(RKEY); } catch {} }
+export async function signOut() { await flush().catch(() => {}); if (!user?.offline) await api.signOut(); user = null; me = null; try { localStorage.removeItem(BASE_KEY); localStorage.removeItem(ME_KEY); localStorage.removeItem(RKEY); localStorage.removeItem(PUSH_KEY); } catch {} }
 export const resetPassword = (email) => api.resetPassword(email);
 export const usernameAvailable = (u) => api.usernameAvailable(u);
 export async function updateDisplayName(name) { await api.updateProfile(user.id, { display_name: name }); me.display_name = name; }
@@ -208,6 +211,7 @@ export async function syncOnLogin({ askAdoptLocal }) {
   }
   await flushOutbox();
   await syncSharedRoutine();
+  if (pushSupported() && Notification.permission === 'granted') enablePush();
 }
 
 let timer = null;
@@ -276,6 +280,32 @@ async function syncSharedRoutine() {
   } catch (e) { console.warn('Rutina compartida pendiente', e); }
 }
 export const friendRoutine = (id) => api.friendRoutine(id);
+
+// ---------- Aviso de fin de descanso por push (llega con el celular bloqueado, sin pausar la música) ----------
+const PUSH_KEY = 'forja.push';
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined';
+export const pushActive = () => !!user && !user.offline && pushSupported() && Notification.permission === 'granted' && localStorage.getItem(PUSH_KEY) === user.id;
+const keyBytes = (b64) => Uint8Array.from(atob(b64.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((b64.length + 3) % 4)), (c) => c.charCodeAt(0));
+// Suscribe este celular (en iPhone solo funciona con la app instalada en la pantalla de inicio).
+export async function enablePush() {
+  if (!user || user.offline || !pushSupported() || Notification.permission !== 'granted' || !VAPID_PUBLIC_KEY) return false;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(VAPID_PUBLIC_KEY) }));
+    const j = sub.toJSON();
+    await api.savePush({ endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth });
+    localStorage.setItem(PUSH_KEY, user.id);
+    return true;
+  } catch (e) { console.warn('Push no disponible', e); return false; }
+}
+export function scheduleRestPush(endMs, next) {
+  if (!pushActive() || !navigator.onLine) return;
+  api.restTimer(user.id, new Date(endMs).toISOString(), String(next || '').slice(0, 120)).catch((e) => console.warn('descanso push', e));
+}
+export function cancelRestPush() {
+  if (!pushActive() || !navigator.onLine) return;
+  api.cancelRest(user.id).catch(() => {});
+}
 
 // ---------- Actividad ----------
 export function publish(kind, payload) {

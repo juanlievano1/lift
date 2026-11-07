@@ -129,6 +129,9 @@ export function mockBackend() {
         .map((a) => ({ ...a, author: pub(d.users.find((u) => u.id === a.user_id)), cheers: d.cheers.filter((c) => c.activity_id === a.id).map((c) => ({ user_id: c.user_id })) }));
     },
     async feedback(f) { (d.feedback ||= []).push({ ...f, user_id: meId(), created_at: new Date().toISOString() }); store(d); },
+    async savePush(s) { d.push = s; store(d); },
+    async restTimer(uid, endsAt, next) { d.rest = { uid, endsAt, next }; store(d); },
+    async cancelRest() { d.rest = null; store(d); },
     async friendRoutine(uid) { return d.routines?.[uid] || null; },
     async shareRoutine(uid, data) { (d.routines ||= {})[uid] = { data, updated_at: new Date().toISOString() }; store(d); },
     async unshareRoutine(uid) { if (d.routines) delete d.routines[uid]; store(d); },

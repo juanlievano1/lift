@@ -418,7 +418,7 @@ button.chip { border: 1px solid var(--line); cursor: pointer; text-transform: no
 .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px; margin: 2px 2px 2px 0; background: var(--surface-2); color: var(--ink-2); }
 .tag.add { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
 .tag.rem { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
-.exfoot .swap { margin-left: auto; }
+.exfoot .swap { margin-left: 0; }
 #modal .chips { flex-wrap: wrap; overflow: visible; }
 .tipcard { border-color: var(--accent); background: var(--accent-soft); }
 
@@ -467,3 +467,5 @@ details.marks summary { cursor: pointer; font-weight: 600; color: var(--ink-2); 
 .fstats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0; text-align: center; }
 .fstats b { display: block; font-family: var(--font-display); font-size: 28px; color: var(--accent-strong); }
 .fstats span { font-size: 12px; color: var(--muted); }
+/* Pie de cada ejercicio: botones centrados (se acomodan en dos filas si no caben) */
+.exfoot { justify-content: center; flex-wrap: wrap; row-gap: 0; }

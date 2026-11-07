@@ -1,6 +1,6 @@
 // Service worker: deja la app disponible sin internet.
 // Sube VERSION cada vez que cambies archivos para que el celular descargue la versión nueva.
-const VERSION = 'lift-v30';
+const VERSION = 'lift-v31';
 const SHELL = [
   './', './index.html', './styles.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/util.js', './js/science.js', './js/program.js', './js/charts.js',
@@ -42,6 +42,16 @@ self.addEventListener('fetch', (e) => {
   if (url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
     e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request).then((res) => { if (res.ok || res.type === 'opaque') { const copy = res.clone(); caches.open(CDN).then((c) => c.put(e.request, copy)); } return res; })));
   }
+});
+
+// Aviso de fin de descanso que manda el servidor (llega con el celular bloqueado, sin pausar la música).
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { /* sin datos: texto por defecto */ }
+  e.waitUntil(self.registration.showNotification(d.title || '¡Vamos con la siguiente serie!', {
+    body: d.body || 'Terminó tu descanso', tag: 'lift-descanso', renotify: true, vibrate: [200, 100, 200],
+    icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
+  }));
 });
 
 // Tocar la notificación de fin de descanso vuelve a la app.
