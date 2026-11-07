@@ -173,6 +173,8 @@ export function prescribe(plan, sessions, ex, w, profile = null) {
   else {
     rir = (lvl === 'principiante' ? [3, 3, 2] : [3, 2, 1])[info.inBlock - 1] ?? 2;
     if (kind === 'i') rir = Math.max(lvl === 'principiante' ? 1 : 0, rir - 1);
+    // Salud: siempre con margen (2–3 en reserva), como promete el plan; nunca cerca del fallo.
+    if (plan.program.goal === 'salud') rir = Math.max(rir, 2);
     if (info.inBlock === 3 && sets < 5) sets += 1;
   }
   const restSec = kind === 'c' ? (repMax <= 6 ? 210 : 150) : 75;
