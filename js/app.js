@@ -316,7 +316,7 @@ function viewEntreno() {
   <header class="top"><div><p class="eyebrow">${a.week ? `Semana ${a.week} · ` : ''}En curso · <span id="elapsed"></span></p><h1>${esc(a.dayName)}</h1></div>
     <button class="btn ghost sm" data-act="cancelSession">Descartar</button></header>
   <div class="progress"><span style="width:${total ? (done / total) * 100 : 0}%"></span></div>
-  ${!s.settings.workoutTipsDone ? firstWorkoutTips(s) : lock.canNotify() && Notification.permission === 'default' && !s.settings.notifyAsked ? `<section class="card tipcard"><p class="small"><b>🔒 Descanso con el celular bloqueado.</b> El descanso se ve en la pantalla de bloqueo (en el panel de "reproduciendo ahora"). ¿Te avisamos con una notificación cuando termine?</p>
+  ${!s.settings.workoutTipsDone ? firstWorkoutTips(s) : lock.canNotify() && Notification.permission === 'default' && !s.settings.notifyAsked ? `<section class="card tipcard"><p class="small"><b>🔔 ¿Te avisamos cuando termine el descanso?</b> Si sales de la app, te llega una notificación (en iPhone puede no llegar con la pantalla bloqueada).</p>
     <div class="actions wrap"><button class="btn primary sm" data-act="enableNotify">Sí, avisarme</button><button class="btn ghost sm" data-act="skipNotify">Ahora no</button></div></section>` : ''}
   ${a.exercises.map((e, i) => exerciseCard(e, i, s)).join('')}
   <button class="btn ghost big" data-act="pickForSession">+ Añadir ejercicio</button>
@@ -1080,7 +1080,8 @@ function viewPerfil() {
     <h3>Tus datos</h3>
     <p class="muted small">${acc ? 'Se guardan en este celular y se sincronizan con tu cuenta.' : 'Todo se guarda en este celular. Exporta un respaldo de vez en cuando.'}</p>
     <label class="switch"><input type="checkbox" data-setting="restSound" ${s.settings.restSound ? 'checked' : ''}> Sonido al terminar el descanso</label>
-    ${lock.supported ? `<label class="switch"><input type="checkbox" data-setting="lockScreen" ${s.settings.lockScreen !== false ? 'checked' : ''}> Ver el descanso en la pantalla de bloqueo</label>` : ''}
+    ${lock.supported ? `<label class="switch"><input type="checkbox" data-setting="lockScreen" ${s.settings.lockScreen === true ? 'checked' : ''}> Ver el descanso en la pantalla de bloqueo</label>
+    <p class="muted small">Ojo: para mostrarlo, la app reproduce un audio en silencio y eso <b>pausa tu música</b> (Spotify, Apple Music…). Actívalo solo si entrenas sin música.</p>` : ''}
     ${lock.canNotify() && Notification.permission !== 'granted' ? `<button class="link" data-act="enableNotify">🔔 Avisarme con una notificación al terminar el descanso</button>` : ''}
     <div class="actions wrap">
       <button class="btn ghost sm" data-act="export">Exportar respaldo</button>
@@ -1165,7 +1166,8 @@ Object.assign(actions, {
         ctx = { ex: e.name, next: nextSet >= 0 ? `Sigue: serie ${nextSet + 1} de ${e.sets.length}` : nextEx ? `Sigue: ${nextEx.name}` : 'Última serie del entreno' };
       }
     });
-    if (rest && db().settings.lockScreen !== false) lock.start({ skip: () => stopRest(), add30: () => actions.restAdd() });
+    // Opcional (apagado por defecto): el audio en silencio que lo hace posible pausa la música del celular.
+    if (rest && db().settings.lockScreen === true) lock.start({ skip: () => stopRest(), add30: () => actions.restAdd() });
     if (rest) startRest(rest, ctx);
     viewEntreno();
   },

@@ -98,17 +98,29 @@ async function loadFeed(userId) {
     const items = await cloud.feed(userId);
     cache.feed = items;
     if (!box) return;
-    box.innerHTML = items.length ? items.map(activityCard).join('') : `<section class="card empty-card"><p>${userId ? 'Todavía no ha registrado entrenos.' : 'Cuando tú o tus amigos terminen un entreno, aparecerá aquí.'}</p></section>`;
+    box.innerHTML = items.length ? items.map(safeCard).join('') : `<section class="card empty-card"><p>${userId ? 'Todavía no ha registrado entrenos.' : 'Cuando tú o tus amigos terminen un entreno, aparecerá aquí.'}</p></section>`;
   } catch (err) { if (box) box.innerHTML = `<p class="muted small">${esc(err.message)}</p>`; }
 }
 
+// El contenido de cada actividad lo escribe otra persona: nunca se confía en su forma.
+// Los números se convierten a número (o '—') y los textos se escapan antes de mostrarlos.
+const num = (v) => { const n = Number(v); return v !== null && v !== '' && Number.isFinite(n) ? n : null; };
+const list = (v) => (Array.isArray(v) ? v : []);
+const safeCard = (a) => { try { return activityCard(a); } catch { return ''; } };
+
 function activityCard(a) {
-  const p = a.payload || {};
+  const raw = a.payload && typeof a.payload === 'object' ? a.payload : {};
+  const p = {
+    planName: raw.planName, dayName: raw.dayName, weekLabel: raw.weekLabel,
+    days: num(raw.days) ?? '—', durationMin: num(raw.durationMin), sets: num(raw.sets), volumeKg: num(raw.volumeKg),
+    prs: list(raw.prs).map(String),
+    top: list(raw.top).filter((t) => t && typeof t === 'object').map((t) => ({ name: t.name, kg: num(t.kg), reps: num(t.reps) ?? '—' })),
+  };
   const who = a.author?.display_name || a.author?.username || 'Alguien';
   const mine = a.user_id === cloud.user.id;
   const cheered = (a.cheers || []).some((c) => c.user_id === cloud.user.id);
   const n = (a.cheers || []).length;
-  const head = `<div class="ahead">${avatar(who)}<span><b>${mine ? 'Tú' : esc(who)}</b><span class="muted small">${timeAgo(a.created_at)}</span></span></div>`;
+  const head = `<div class="ahead">${avatar(who)}<span><b>${mine ? 'Tú' : esc(who)}</b><span class="muted small">${esc(timeAgo(a.created_at))}</span></span></div>`;
   if (a.kind === 'plan') {
     return `<section class="card activity">${head}<p>Empezó un plan nuevo de 12 semanas: <b>${esc(p.planName)}</b> · ${p.days} días por semana 🗓️</p></section>`;
   }
@@ -118,7 +130,7 @@ function activityCard(a) {
     <div class="astats"><span><b>${p.durationMin ?? '—'}</b> min</span><span><b>${p.sets ?? '—'}</b> series</span>${p.volumeKg ? `<span><b>${n1(p.volumeKg / 1000)}</b> t movidas</span>` : ''}</div>
     ${p.prs?.length ? `<p class="prs">🏆 Récord en ${p.prs.map(esc).join(', ')}</p>` : ''}
     ${p.top?.length ? `<ul class="mini">${p.top.map((t) => `<li><span>${esc(t.name)}</span><span>${t.kg ? `${n1(t.kg)} kg × ${t.reps}` : `${t.reps} reps`}</span></li>`).join('')}</ul>` : ''}
-    <div class="afoot"><button class="cheer ${cheered ? 'on' : ''}" data-act="cheer" data-id="${a.id}" ${mine ? 'disabled' : ''} aria-pressed="${cheered}">💪 ${n ? n : ''} ${mine ? (n ? `fuerza${n > 1 ? 's' : ''}` : 'Sin fuerzas aún') : cheered ? 'Le diste fuerzas' : 'Dar fuerzas'}</button></div>
+    <div class="afoot"><button class="cheer ${cheered ? 'on' : ''}" data-act="cheer" data-id="${esc(a.id)}" ${mine ? 'disabled' : ''} aria-pressed="${cheered}">💪 ${n ? n : ''} ${mine ? (n ? `fuerza${n > 1 ? 's' : ''}` : 'Sin fuerzas aún') : cheered ? 'Le diste fuerzas' : 'Dar fuerzas'}</button></div>
   </section>`;
 }
 
