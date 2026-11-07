@@ -481,3 +481,7 @@ details.marks summary { cursor: pointer; font-weight: 600; color: var(--ink-2); 
 .fcard .dots { display: inline-flex; gap: 5px; vertical-align: middle; margin-left: 6px; }
 .fcard .dots i { width: 12px; height: 12px; border-radius: 99px; background: var(--line); }
 .fcard .dots i.on { background: var(--accent); }
+
+/* Aviso de navegador interno (Instagram, Facebook...) */
+.inapp { border-color: var(--accent); }
+.inapp p { margin: 0 0 8px; }

@@ -11,15 +11,38 @@ import { $, esc, toast, actions, rerender } from './ui.js';
   const code = qs.get('i'), uname = qs.get('invite');
   if (code && /^[A-Za-z0-9]{6,40}$/.test(code)) cloud.saveInvite({ code });
   else if (uname && /^[A-Za-z0-9_]{3,20}$/.test(uname)) cloud.saveInvite({ username: uname.toLowerCase() });
-  if (code || uname) {
-    const url = new URL(location.href); url.searchParams.delete('i'); url.searchParams.delete('invite');
-    history.replaceState(null, '', url.pathname + url.search + url.hash);
-  }
+  // El código NO se quita de la dirección hasta usarlo: si la persona pasa a Chrome o Safari
+  // ("Abrir en el navegador") o copia el enlace, la invitación viaja con ella.
   // Invitaciones abiertas con la versión anterior (solo duraban en la pestaña).
   try { const old = sessionStorage.getItem('forja.invite'); if (old && !cloud.pendingInvite()) cloud.saveInvite({ username: old }); sessionStorage.removeItem('forja.invite'); } catch {}
 }
 
 // Texto de la invitación en la bienvenida: el nombre de quien invita se consulta con el código.
+function dropInviteParam() {
+  const url = new URL(location.href);
+  if (!url.searchParams.has('i') && !url.searchParams.has('invite')) return;
+  url.searchParams.delete('i'); url.searchParams.delete('invite');
+  history.replaceState(null, '', url.pathname + url.search + url.hash);
+}
+
+// Navegadores internos de Instagram, Facebook, TikTok, etc.: Google no deja entrar desde ahí
+// y lo que se guarda en ellos no pasa a Chrome o Safari.
+const IN_APP = /FBAN|FBAV|FB_IAB|FBIOS|Instagram|Line\/|TikTok|musical_ly|Bytedance|Snapchat|Twitter|LinkedInApp|; wv\)/i.test(navigator.userAgent);
+function inviteLink() {
+  const inv = cloud.pendingInvite();
+  const url = new URL(location.origin + location.pathname);
+  if (inv?.code) url.searchParams.set('i', inv.code); else if (inv?.username) url.searchParams.set('invite', inv.username);
+  return url.toString();
+}
+function inAppHint() {
+  if (!IN_APP || cloud.mockMode) return '';
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  return `<section class="card inapp"><p><b>Abre ${APP_NAME} en ${ios ? 'Safari' : 'Chrome'}</b></p>
+    <p class="small">Estás en el navegador de otra app y desde aquí no se puede entrar con Google${cloud.pendingInvite() ? ' ni guardar la invitación de tu amigo' : ''}.
+    Toca <b>⋯</b> arriba y elige <b>Abrir en el navegador</b>, o copia el enlace y pégalo en ${ios ? 'Safari' : 'Chrome'}.</p>
+    <button class="btn primary sm" data-act="copyAppLink" type="button">Copiar enlace</button></section>`;
+}
+
 function inviteBanner() {
   const inv = cloud.pendingInvite();
   if (!inv) return '';
@@ -52,6 +75,7 @@ export function viewAuth() {
       <h1>${APP_TAGLINE.replace('. ', '.<br>')}</h1>
       ${inviteBanner()}
     </section>
+    ${inAppHint()}
     <ul class="features">
       <li><b>Tu rutina, revisada</b><span>Arma la tuya o créala al instante. La app revisa que esté balanceada.</span></li>
       <li><b>Pesos sugeridos</b><span>Te dice cuánto peso poner y cuándo subirlo.</span></li>
@@ -76,7 +100,7 @@ export function viewAuth() {
   const signup = mode === 'signup';
   const reset = mode === 'reset';
   main.innerHTML = `${head}<h1>${signup ? 'Crea tu cuenta' : reset ? 'Recuperar contraseña' : '¡Qué bueno verte otra vez!'}</h1></section>
-    ${reset ? '' : `${googleBtn(signup ? 'Registrarme con Google' : 'Entrar con Google')}<div class="divider"><span>o con tu correo</span></div>`}
+    ${reset ? '' : `${inAppHint()}${googleBtn(signup ? 'Registrarme con Google' : 'Entrar con Google')}<div class="divider"><span>o con tu correo</span></div>`}
     <form id="authf" class="card form" novalidate>
       ${signup ? `
       <label>Tu nombre<input name="displayName" autocomplete="name" maxlength="40" required placeholder="Juan Liévano"></label>
@@ -189,6 +213,7 @@ async function enter() {
 // Si falla por conexión, la invitación se conserva y se reintenta la próxima vez que abras la app.
 let consuming = false;
 export async function consumeInvite() {
+  if (cloud.user) dropInviteParam();
   const inv = cloud.pendingInvite();
   if (!inv || !cloud.user || consuming) return;
   consuming = true;
@@ -216,6 +241,11 @@ export async function consumeInvite() {
 }
 
 Object.assign(actions, {
+  copyAppLink: async () => {
+    const link = inviteLink();
+    try { await navigator.clipboard.writeText(link); toast('Enlace copiado: pégalo en el navegador'); }
+    catch { prompt('Copia este enlace y pégalo en el navegador:', link); }
+  },
   authMode: (el) => { mode = el.dataset.mode; viewAuth(); },
   google: async (el) => {
     if (busy) return;

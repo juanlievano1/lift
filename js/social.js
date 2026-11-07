@@ -86,7 +86,7 @@ async function loadFriends() {
     const list = $('#flist');
     if (!list) return;
     if (!accepted.length) {
-      list.innerHTML = `<section class="card empty-card"><p>Aún no tienes amigos en ${APP_NAME}.</p><button class="btn primary" data-act="invite">Invitar amigos</button></section>`;
+      list.innerHTML = `<section class="card empty-card"><p>Aún no tienes amigos en ${APP_NAME}.</p><p class="muted small">¿Alguien te invitó? Busca su @usuario arriba y envíale la solicitud.</p><button class="btn primary" data-act="invite">Invitar amigos</button></section>`;
       return;
     }
     // Lo actual de cada amigo: su rutina, cómo va esta semana y cuándo entrenó por última vez.
