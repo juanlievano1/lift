@@ -525,7 +525,7 @@ function finishSession() {
   const s = db();
   const a = s.activeSession;
   const exs = a.exercises.map((e) => ({ ...e, sets: e.sets.filter((x) => x.done && !x.warm) })).filter((e) => e.sets.length);
-  if (!exs.length) { if (!confirm('No marcaste ninguna serie. ¿Descartar el entreno?')) return; update((st) => (st.activeSession = null)); stopRest(); lock.stop(); return go('hoy'); }
+  if (!exs.length) { if (!confirm('No marcaste ninguna serie. ¿Descartar el entreno?')) return; update((st) => (st.activeSession = null)); stopRest(); return go('hoy'); }
   const pending = a.exercises.reduce((n, e) => n + e.sets.filter((x) => !x.done && !x.warm).length, 0);
   if (pending && !confirm(`Te ${pending === 1 ? 'falta 1 serie' : `faltan ${pending} series`} sin marcar. ¿Terminar el entreno igual? (Las que no marcaste no se guardan.)`)) return;
   // Récords personales (por e1RM estimado)
@@ -546,7 +546,6 @@ function finishSession() {
     }
   });
   stopRest();
-  lock.stop();
   go('hoy');
   shareSession(session);
   if (COACH_ENABLED && cloud.enabled && db().settings.coachAfterSession) runPostSession(session.id);
@@ -589,7 +588,7 @@ function startRest(sec, ctx = {}) {
   // Aviso del servidor al terminar (llega aunque el celular esté bloqueado y sin pausar la música).
   cloud.scheduleRestPush(restTimer.end, restTimer.next);
 }
-function stopRest() { restTimer = null; renderRestBar(); lockIdle(); lock.clearRestInfo(); cloud.cancelRestPush(); }
+function stopRest() { restTimer = null; renderRestBar(); lock.clearRestInfo(); cloud.cancelRestPush(); }
 // Al bloquear el celular o salir de la app durante el descanso: aviso con la hora a la que termina.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && restTimer) {
@@ -597,14 +596,6 @@ document.addEventListener('visibilitychange', () => {
     lock.restInfo(`Descanso hasta las ${at}`, restTimer.next || 'Lift te avisa cuando termine');
   } else if (document.visibilityState === 'visible') lock.clearRestInfo();
 });
-// Panel del celular entre descansos: "Entrenando · Torso A".
-function lockIdle() {
-  const a = db().activeSession;
-  if (!a || !lock.active()) return;
-  const done = a.exercises.reduce((x, e) => x + e.sets.filter((z) => z.done).length, 0);
-  const total = a.exercises.reduce((x, e) => x + e.sets.length, 0);
-  lock.show({ title: `Entrenando · ${a.dayName}`, artist: 'Lift', album: `${done} de ${total} series` });
-}
 function renderRestBar() {
   const bar = $('#rest');
   document.body.classList.toggle('resting', !!restTimer);
@@ -620,14 +611,12 @@ function renderRestBar() {
   }
   bar.querySelector('.rclock').textContent = clock;
   bar.querySelector('.rtrack > span').style.width = `${(left / restTimer.total) * 100}%`;
-  lock.show({ title: `Descanso ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`, artist: restTimer.ex ? `Lift · ${restTimer.ex}` : 'Lift', album: restTimer.next || '', duration: restTimer.total, position: restTimer.total - left });
   if (left === 0) {
     try { navigator.vibrate?.([200, 100, 200]); } catch {}
     beep();
     // Con la app a la vista no hace falta el aviso del servidor; si está oculta, avisa el servidor (o el celular, si no hay push).
     if (document.visibilityState === 'visible') cloud.cancelRestPush();
     else if (!cloud.pushActive()) lock.notify('¡Vamos con la siguiente serie!', restTimer.next || 'Terminó tu descanso');
-    setTimeout(lockIdle, 1500);
     toast('¡Vamos con la siguiente serie!');
     restTimer = null;
     bar.innerHTML = '';
@@ -1196,8 +1185,6 @@ function viewPerfil() {
     <h3>Tus datos</h3>
     <p class="muted small">${acc ? 'Se guardan en este celular y se sincronizan con tu cuenta.' : 'Todo se guarda en este celular. Exporta un respaldo de vez en cuando.'}</p>
     <label class="switch"><input type="checkbox" data-setting="restSound" ${s.settings.restSound ? 'checked' : ''}> Sonido al terminar el descanso</label>
-    ${lock.supported ? `<label class="switch"><input type="checkbox" data-setting="lockScreen" ${s.settings.lockScreen === true ? 'checked' : ''}> Cuenta regresiva en vivo en la pantalla de bloqueo (pausa tu música)</label>
-    <p class="muted small">No hace falta: con las notificaciones activadas ya ves a qué hora termina tu descanso y te llega el aviso, sin pausar la música.</p>` : ''}
     ${lock.canNotify() && Notification.permission !== 'granted' ? `<button class="link" data-act="enableNotify">🔔 Avisarme con una notificación al terminar el descanso</button>` : ''}
     <div class="actions wrap">
       <button class="btn ghost sm" data-act="export">Exportar respaldo</button>
@@ -1210,7 +1197,7 @@ function viewPerfil() {
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
-  <p class="muted small center">${APP_NAME} v0.23${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center">${APP_NAME} v0.24${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -1299,8 +1286,6 @@ Object.assign(actions, {
         ctx = { ex: e.name, next: nextSet >= 0 ? `Sigue: serie ${nextSet + 1} de ${e.sets.length}` : nextEx ? `Sigue: ${nextEx.name}` : 'Última serie del entreno' };
       }
     });
-    // Opcional (apagado por defecto): el audio en silencio que lo hace posible pausa la música del celular.
-    if (rest && db().settings.lockScreen === true) lock.start({ skip: () => stopRest(), add30: () => actions.restAdd() });
     if (rest) startRest(rest, ctx);
     viewEntreno();
   },
@@ -1375,7 +1360,7 @@ Object.assign(actions, {
     viewEntreno();
   }),
   finish: () => finishSession(),
-  cancelSession: () => { if (confirm('¿Descartar este entreno? No se guardará.')) { update((st) => (st.activeSession = null)); stopRest(); lock.stop(); go('hoy'); } },
+  cancelSession: () => { if (confirm('¿Descartar este entreno? No se guardará.')) { update((st) => (st.activeSession = null)); stopRest(); go('hoy'); } },
   enableNotify: async () => { const ok = await lock.askNotify(); if (ok) await cloud.enablePush(); update((st) => (st.settings.notifyAsked = true)); toast(ok ? 'Listo: te avisamos cuando termine el descanso' : 'Sin permiso de notificaciones: puedes activarlo en los ajustes del celular'); render(); },
   skipNotify: () => { update((st) => (st.settings.notifyAsked = true)); render(); },
   tourGo: (el) => openTour(+el.dataset.i),
@@ -1399,7 +1384,7 @@ Object.assign(actions, {
     if (!msg) { err.textContent = 'Escribe tu comentario antes de enviar.'; err.hidden = false; return; }
     el.disabled = true; el.textContent = 'Enviando…';
     try {
-      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.23' });
+      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.24' });
       closeModal(); toast('¡Gracias! Comentario enviado');
     } catch (ex) { err.textContent = ex.message; err.hidden = false; el.disabled = false; el.textContent = 'Enviar'; }
   },
