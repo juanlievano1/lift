@@ -3,7 +3,7 @@ import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, PRIORITIES, b
 import { lineChart, volumeBars } from './charts.js';
 import { reviewRoutine, applyFix } from './routine.js';
 import { WEEKS, newProgram, ensureProgram, weekInfo, prescribe, unitOf, inUnit, fromUnit, numStr, fmtW, roundLoad, exerciseTrack, exerciseStatus, uniqueExercises, applyRec, dismissRec, blocksFor, planReport, applyReviewChanges } from './program.js';
-import { $, esc, fmtDate, n1, clone, toast, openModal, closeModal, modalOpen, actions, routes, setRenderer, go, avatar } from './ui.js';
+import { $, esc, fmtDate, n1, clone, toast, openModal, closeModal, modalOpen, actions, routes, setRenderer, go, avatar, squarePhoto } from './ui.js';
 import { MODE_LABEL, SOURCE, withProgram, rxLabel, currentWeek, weekStart, weightStats, weightText, planRecs } from './domain.js';
 import * as cloud from './cloud.js';
 import * as lock from './lockscreen.js';
@@ -50,7 +50,7 @@ setRenderer(render);
 function addProfileButton(route) {
   const top = main.querySelector('header.top');
   if (!top || top.querySelector('.me') || ['perfil', 'entreno', 'editar'].includes(route)) return;
-  const btn = `<a href="#perfil" class="me" aria-label="Tu perfil y cerrar sesión">${avatar(cloud.me?.display_name || db().profile?.name)}</a>`;
+  const btn = `<a href="#perfil" class="me" aria-label="Tu perfil y cerrar sesión">${avatar(cloud.me?.display_name || db().profile?.name, '', cloud.me?.avatar_path)}</a>`;
   if (top.children.length >= 2) {
     const right = top.lastElementChild;
     const wrap = document.createElement('div');
@@ -176,7 +176,7 @@ function openTour(i = 0) {
     <p>${st.text}</p>
     <p class="muted small">Lo encuentras en la barra de abajo:</p>
     <div class="tournav" aria-hidden="true">${tabs}</div>
-    ${last ? `<p class="small tourme">${avatar(cloud.me?.display_name || db().profile?.name)}<span>Arriba a la derecha está tu <b>Perfil</b>: ahí cambias kg o lb, invitas amigos y puedes ver esta guía otra vez.</span></p>` : ''}
+    ${last ? `<p class="small tourme">${avatar(cloud.me?.display_name || db().profile?.name, '', cloud.me?.avatar_path)}<span>Arriba a la derecha está tu <b>Perfil</b>: ahí cambias kg o lb, invitas amigos y puedes ver esta guía otra vez.</span></p>` : ''}
     <div class="dots" aria-hidden="true">${steps.map((_, k) => `<span class="${k === i ? 'on' : ''}"></span>`).join('')}</div>
     <div class="actions">
       ${i > 0 ? `<button class="btn ghost" data-act="tourGo" data-i="${i - 1}">Atrás</button>` : '<button class="btn ghost" data-act="tourEnd">Saltar</button>'}
@@ -214,7 +214,7 @@ function viewHoy() {
   const rateOk = ws?.rate != null && ws.rate >= rlo - 0.05 && ws.rate <= rhi + 0.05;
 
   main.innerHTML = `
-  <header class="top"><div><p class="muted">${hi}${s.profile.name ? ', ' + esc(s.profile.name) : ''} · ${new Date().toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long' })}</p><h1>Hoy</h1></div><a href="#perfil" class="me" aria-label="Tu perfil">${avatar(cloud.me?.display_name || s.profile.name)}</a></header>
+  <header class="top"><div><p class="muted">${hi}${s.profile.name ? ', ' + esc(s.profile.name) : ''} · ${new Date().toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long' })}</p><h1>Hoy</h1></div><a href="#perfil" class="me" aria-label="Tu perfil">${avatar(cloud.me?.display_name || s.profile.name, '', cloud.me?.avatar_path)}</a></header>
 
   ${coachBanner()}
   ${installCard(s)}
@@ -1158,7 +1158,9 @@ function viewPerfil() {
 
   ${acc ? `
   <section class="card account">
-    <div class="acchead">${avatar(cloud.me?.display_name || s.profile.name, 'lg')}<div><h2>${esc(cloud.me?.display_name || s.profile.name || '')}</h2><p class="muted small">@${esc(cloud.me?.username || '')} · ${esc(cloud.user.email || '')}</p></div></div>
+    <div class="acchead"><button class="avbtn" type="button" data-act="pickAvatar" aria-label="${cloud.me?.avatar_path ? 'Cambiar' : 'Poner'} foto de perfil">${avatar(cloud.me?.display_name || s.profile.name, 'lg', cloud.me?.avatar_path)}<span class="avcam" aria-hidden="true">📷</span></button><div><h2>${esc(cloud.me?.display_name || s.profile.name || '')}</h2><p class="muted small">@${esc(cloud.me?.username || '')} · ${esc(cloud.user.email || '')}</p>
+      <p class="small">${cloud.me?.avatar_path ? '<button class="link" type="button" data-act="pickAvatar">Cambiar foto</button> · <button class="link" type="button" data-act="removeAvatar">Quitar</button>' : '<button class="link" type="button" data-act="pickAvatar">Poner foto de perfil</button>'}</p></div></div>
+    <input type="file" id="avfile" accept="image/*" hidden>
     <form id="nform" class="inline"><input name="dn" value="${esc(cloud.me?.display_name || '')}" maxlength="40" aria-label="Nombre visible para tus amigos"><button class="btn ghost" type="submit">Cambiar</button></form>
     <p class="muted small">Tu nombre visible para tus amigos.</p>
     <div class="actions wrap"><button class="btn ghost sm" data-act="invite">Invitar amigos</button><button class="btn ghost sm" data-act="logout">Cerrar sesión</button></div>
@@ -1194,8 +1196,8 @@ function viewPerfil() {
     <h3>Tus datos</h3>
     <p class="muted small">${acc ? 'Se guardan en este celular y se sincronizan con tu cuenta.' : 'Todo se guarda en este celular. Exporta un respaldo de vez en cuando.'}</p>
     <label class="switch"><input type="checkbox" data-setting="restSound" ${s.settings.restSound ? 'checked' : ''}> Sonido al terminar el descanso</label>
-    ${lock.supported ? `<label class="switch"><input type="checkbox" data-setting="lockScreen" ${s.settings.lockScreen === true ? 'checked' : ''}> Ver el descanso en la pantalla de bloqueo</label>
-    <p class="muted small">Ojo: para mostrarlo, la app reproduce un audio en silencio y eso <b>pausa tu música</b> (Spotify, Apple Music…). Actívalo solo si entrenas sin música.</p>` : ''}
+    ${lock.supported ? `<label class="switch"><input type="checkbox" data-setting="lockScreen" ${s.settings.lockScreen === true ? 'checked' : ''}> Cuenta regresiva en vivo en la pantalla de bloqueo (pausa tu música)</label>
+    <p class="muted small">No hace falta: con las notificaciones activadas ya ves a qué hora termina tu descanso y te llega el aviso, sin pausar la música.</p>` : ''}
     ${lock.canNotify() && Notification.permission !== 'granted' ? `<button class="link" data-act="enableNotify">🔔 Avisarme con una notificación al terminar el descanso</button>` : ''}
     <div class="actions wrap">
       <button class="btn ghost sm" data-act="export">Exportar respaldo</button>
@@ -1208,7 +1210,7 @@ function viewPerfil() {
   ${acc ? '<button class="btn ghost big" data-act="logout">Cerrar sesión</button>' : ''}
   ${cloud.mockMode ? '<button class="btn ghost big danger" data-act="demoReset">Empezar la prueba desde cero</button><p class="muted small center">Borra la cuenta de prueba y todos sus datos de este celular.</p>' : ''}
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
-  <p class="muted small center">${APP_NAME} v0.22${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
+  <p class="muted small center">${APP_NAME} v0.23${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
@@ -1232,6 +1234,15 @@ function viewPerfil() {
       return go('hoy');
     }
     toast('Perfil guardado');
+  });
+  $('#avfile')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const btn = $('.avbtn');
+    btn?.classList.add('busy');
+    try { await cloud.setAvatar(await squarePhoto(file)); toast('Foto actualizada'); render(); }
+    catch (err) { toast(err.message || 'No se pudo subir la foto'); btn?.classList.remove('busy'); }
   });
   $('#nform')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1313,6 +1324,11 @@ Object.assign(actions, {
   },
   backToStart: () => viewStart(),
   installApp: async () => { if (!installEvt) return; installEvt.prompt(); try { await installEvt.userChoice; } catch {} installEvt = null; update((st) => (st.settings.installTipDone = true)); render(); },
+  pickAvatar: () => { if (!navigator.onLine) return toast('Necesitas conexión para cambiar tu foto.'); $('#avfile')?.click(); },
+  removeAvatar: async () => {
+    if (!confirm('¿Quitar tu foto de perfil?')) return;
+    try { await cloud.clearAvatar(); toast('Foto quitada'); render(); } catch (err) { toast(err.message); }
+  },
   installDone: () => { update((st) => (st.settings.installTipDone = true)); render(); },
   swapEx: (el) => openSwap(+el.dataset.ex),
   swapTo: (el) => { const lib = exerciseByName(el.dataset.name); if (lib) swapExercise(lib); },
@@ -1383,7 +1399,7 @@ Object.assign(actions, {
     if (!msg) { err.textContent = 'Escribe tu comentario antes de enviar.'; err.hidden = false; return; }
     el.disabled = true; el.textContent = 'Enviando…';
     try {
-      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.22' });
+      await cloud.sendFeedback({ screen: (location.hash.slice(1) || 'hoy').split('/')[0], message: msg, version: 'v0.23' });
       closeModal(); toast('¡Gracias! Comentario enviado');
     } catch (ex) { err.textContent = ex.message; err.hidden = false; el.disabled = false; el.textContent = 'Enviar'; }
   },

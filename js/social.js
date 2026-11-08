@@ -59,7 +59,7 @@ export function viewAmigos() {
         const [res, fr] = await Promise.all([cloud.searchUsers(q), cloud.friends()]);
         const status = Object.fromEntries(fr.map((f) => [f.id, f.status]));
         $('#fresults').innerHTML = res.filter((u) => u.id !== cloud.user.id).map((u) => `
-          <div class="person">${avatar(u.display_name || u.username)}<span><b>${esc(u.display_name || u.username)}</b><span class="muted small">@${esc(u.username)}</span></span>
+          <div class="person">${avatar(u.display_name || u.username, '', u.avatar_path)}<span><b>${esc(u.display_name || u.username)}</b><span class="muted small">@${esc(u.username)}</span></span>
           ${status[u.id] === 'accepted' ? '<span class="chip ok">Amigos</span>' : status[u.id] ? '<span class="chip">Pendiente</span>' : `<button class="btn primary sm" data-act="addFriend" data-id="${u.id}" data-u="${esc(u.username)}">Agregar</button>`}</div>`).join('') || '<p class="muted small">Nadie con ese usuario.</p>';
       } catch (err) { $('#fresults').innerHTML = `<p class="muted small">${esc(err.message)}</p>`; }
     }, 300);
@@ -77,10 +77,10 @@ async function loadFriends() {
     const req = $('#frequests');
     if (req) req.innerHTML = incoming.length || outgoing.length ? `<section class="card">
       ${incoming.length ? `<p class="eyebrow">Solicitudes para ti</p>${incoming.map((u) => `
-        <div class="person">${avatar(u.display_name || u.username)}<span><b>${esc(u.display_name || u.username)}</b><span class="muted small">@${esc(u.username)}</span></span>
+        <div class="person">${avatar(u.display_name || u.username, '', u.avatar_path)}<span><b>${esc(u.display_name || u.username)}</b><span class="muted small">@${esc(u.username)}</span></span>
         <span class="row"><button class="btn primary sm" data-act="acceptFriend" data-id="${u.id}">Aceptar</button><button class="icon" data-act="removeFriend" data-id="${u.id}" aria-label="Rechazar">✕</button></span></div>`).join('')}` : ''}
       ${outgoing.length ? `<p class="eyebrow">Enviadas</p>${outgoing.map((u) => `
-        <div class="person">${avatar(u.display_name || u.username)}<span><b>${esc(u.display_name || u.username)}</b><span class="muted small">@${esc(u.username)} · esperando</span></span>
+        <div class="person">${avatar(u.display_name || u.username, '', u.avatar_path)}<span><b>${esc(u.display_name || u.username)}</b><span class="muted small">@${esc(u.username)} · esperando</span></span>
         <button class="link" data-act="removeFriend" data-id="${u.id}">Cancelar</button></div>`).join('')}` : ''}
     </section>` : '';
     const list = $('#flist');
@@ -113,7 +113,7 @@ function myCard() {
   const monday = mondayOf(Date.now());
   const done = s.sessions.filter((x) => new Date(`${x.date}T12:00:00`).getTime() >= monday).length;
   const last = s.sessions[s.sessions.length - 1];
-  return `<a class="card fcard" href="#rutinas"><div class="ahead">${avatar(cloud.me?.display_name || s.profile?.name)}<span><b>Tú</b><span class="muted small">${plan ? esc(plan.name) : 'Sin rutina activa'}</span></span><span class="chev">›</span></div>
+  return `<a class="card fcard" href="#rutinas"><div class="ahead">${avatar(cloud.me?.display_name || s.profile?.name, '', cloud.me?.avatar_path)}<span><b>Tú</b><span class="muted small">${plan ? esc(plan.name) : 'Sin rutina activa'}</span></span><span class="chev">›</span></div>
     <p class="week">${weekLine(done, plan?.days.length)}</p>
     <p class="muted small">${last ? `Último entreno: ${esc(timeAgo(`${last.date}T12:00:00`))}` : 'Aún no has entrenado'}</p></a>`;
 }
@@ -128,7 +128,7 @@ function friendCard(u, items, routine) {
   const recent = last && Date.now() - new Date(last.created_at).getTime() < 7 * DAY;
   const cheer = recent ? (safeCard(last).match(/<button class="cheer[\s\S]*?<\/button>/) || [''])[0] : '';
   const dayName = recent && last.payload && typeof last.payload.dayName === 'string' ? ` · ${esc(last.payload.dayName)}` : '';
-  return `<section class="card fcard"><a class="flink" href="#amigos/${encodeURIComponent(u.username)}"><div class="ahead">${avatar(u.display_name || u.username)}<span><b>${name}</b><span class="muted small">${r ? esc(r.name) : 'No comparte su rutina'}</span></span><span class="chev">›</span></div>
+  return `<section class="card fcard"><a class="flink" href="#amigos/${encodeURIComponent(u.username)}"><div class="ahead">${avatar(u.display_name || u.username, '', u.avatar_path)}<span><b>${name}</b><span class="muted small">${r ? esc(r.name) : 'No comparte su rutina'}</span></span><span class="chev">›</span></div>
     <p class="week">${weekLine(done, r?.days.length)}</p>
     <p class="muted small">${last ? `Último entreno: ${esc(timeAgo(last.created_at))}${dayName}` : 'Aún no ha compartido entrenos'}</p></a>
     ${cheer ? `<div class="afoot">${cheer}</div>` : ''}</section>`;
@@ -158,7 +158,7 @@ function activityCard(a) {
   const myUnit = db().profile?.unit === 'lb' ? 'lb' : 'kg';
   const cheered = (a.cheers || []).some((c) => c.user_id === cloud.user.id);
   const n = (a.cheers || []).length;
-  const head = `<div class="ahead">${avatar(who)}<span><b>${mine ? 'Tú' : esc(who)}</b><span class="muted small">${esc(timeAgo(a.created_at))}</span></span></div>`;
+  const head = `<div class="ahead">${avatar(who, '', mine ? cloud.me?.avatar_path : a.author?.avatar_path)}<span><b>${mine ? 'Tú' : esc(who)}</b><span class="muted small">${esc(timeAgo(a.created_at))}</span></span></div>`;
   if (a.kind === 'plan') {
     return `<section class="card activity">${head}<p>Empezó una rutina nueva${raw.weeks === 12 ? ' de 12 semanas' : ''}: <b>${esc(p.planName)}</b> · ${p.days} días por semana 🗓️</p></section>`;
   }
@@ -218,7 +218,7 @@ async function viewFriend(username) {
     if (!u) { $('#feed').innerHTML = '<p class="muted">No encontramos a esa persona.</p>'; return; }
     const fr = cache.friends?.length ? cache.friends : await timeout(cloud.friends());
     const rel = fr.find((f) => f.id === u.id)?.status;
-    $('#fhead').innerHTML = `<section class="card"><div class="person">${avatar(u.display_name || u.username, 'lg')}<span><b>${esc(u.display_name || u.username)}</b><span class="muted small">@${esc(u.username)}</span></span>
+    $('#fhead').innerHTML = `<section class="card"><div class="person">${avatar(u.display_name || u.username, 'lg', u.avatar_path)}<span><b>${esc(u.display_name || u.username)}</b><span class="muted small">@${esc(u.username)}</span></span>
       ${rel === 'accepted' ? `<button class="link danger" data-act="removeFriend" data-id="${u.id}" data-confirm="1">Eliminar</button>` : rel ? '<span class="chip">Pendiente</span>' : `<button class="btn primary sm" data-act="addFriend" data-id="${u.id}" data-u="${esc(u.username)}">Agregar</button>`}</div></section>`;
     if (rel !== 'accepted') { $('#feed').innerHTML = '<section class="card empty-card"><p>Cuando sean amigos verás sus entrenos y su avance.</p></section>'; return; }
     const name = esc(u.display_name?.split(' ')[0] || `@${u.username}`);

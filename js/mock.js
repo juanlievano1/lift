@@ -32,7 +32,7 @@ function seed() {
 
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || seed(); } catch { return seed(); } };
 const store = (d) => localStorage.setItem(KEY, JSON.stringify(d));
-const pub = (u) => u && { id: u.id, username: u.username, display_name: u.display_name, username_confirmed: u.username_confirmed !== false };
+const pub = (u) => u && { id: u.id, username: u.username, display_name: u.display_name, username_confirmed: u.username_confirmed !== false, avatar_path: u.avatar_path || null };
 
 export function mockBackend() {
   let d = load();
@@ -93,6 +93,8 @@ export function mockBackend() {
     async usernameAvailable(u) { return /^[a-z0-9_]{3,20}$/.test(u.toLowerCase()) && !d.users.some((x) => x.username === u.toLowerCase()); },
     async profile(uid) { return pub(d.users.find((u) => u.id === uid)); },
     async updateProfile(uid, f) { Object.assign(d.users.find((u) => u.id === uid), f); store(d); },
+    async uploadAvatar(uid, blob) { await wait(300); return await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); }); },
+    async removeAvatarFile() {},
     async pull(uid) { return d.data[uid] || null; },
     async push(uid, data) { d.data[uid] = { data, updated_at: new Date().toISOString() }; store(d); },
     async friendships() {

@@ -37,16 +37,23 @@ async function supabaseBackend() {
     async signOut() { await sb.auth.signOut(); },
     async resetPassword(email) { must(await sb.auth.resetPasswordForEmail(email, { redirectTo: returnUrl() })); },
     async usernameAvailable(u) { return must(await sb.rpc('username_available', { p_username: u })); },
-    async profile(id) { return must(await sb.from('profiles').select('id, username, display_name, username_confirmed').eq('id', id).single()); },
+    async profile(id) { return must(await sb.from('profiles').select('id, username, display_name, username_confirmed, avatar_path').eq('id', id).single()); },
     async confirmUsername(id, username, display_name) { must(await sb.from('profiles').update({ username: username.toLowerCase(), display_name, username_confirmed: true }).eq('id', id)); },
     async updateProfile(id, fields) { must(await sb.from('profiles').update(fields).eq('id', id)); },
+    // Foto de perfil: un archivo nuevo cada vez (así nadie ve la foto vieja guardada en caché).
+    async uploadAvatar(id, blob) {
+      const path = `${id}/${Date.now()}.jpg`;
+      must(await sb.storage.from('avatars').upload(path, blob, { contentType: 'image/jpeg', cacheControl: '31536000', upsert: false }));
+      return path;
+    },
+    async removeAvatarFile(path) { await sb.storage.from('avatars').remove([path]); },
     async pull(id) { return must(await sb.from('user_data').select('data, updated_at').eq('user_id', id).maybeSingle()); },
     async push(id, data) { must(await sb.from('user_data').upsert({ user_id: id, data, updated_at: new Date().toISOString() })); },
     async friendships() {
-      return must(await sb.from('friendships').select('requester, addressee, status, created_at, req:profiles!friendships_requester_fkey(id, username, display_name), adr:profiles!friendships_addressee_fkey(id, username, display_name)'));
+      return must(await sb.from('friendships').select('requester, addressee, status, created_at, req:profiles!friendships_requester_fkey(id, username, display_name, avatar_path), adr:profiles!friendships_addressee_fkey(id, username, display_name, avatar_path)'));
     },
-    async search(q) { return must(await sb.from('profiles').select('id, username, display_name').ilike('username', `${q.toLowerCase().replace(/[%_]/g, '')}%`).limit(10)); },
-    async byUsername(u) { return must(await sb.from('profiles').select('id, username, display_name').eq('username', u.toLowerCase()).maybeSingle()); },
+    async search(q) { return must(await sb.from('profiles').select('id, username, display_name, avatar_path').ilike('username', `${q.toLowerCase().replace(/[%_]/g, '')}%`).limit(10)); },
+    async byUsername(u) { return must(await sb.from('profiles').select('id, username, display_name, avatar_path').eq('username', u.toLowerCase()).maybeSingle()); },
     async request(to) { must(await sb.from('friendships').insert({ requester: await uidNow(), addressee: to })); },
     async accept(from) { must(await sb.from('friendships').update({ status: 'accepted' }).eq('requester', from).eq('addressee', await uidNow())); },
     async inviteCode() { return must(await sb.rpc('my_invite_code')); },
@@ -54,7 +61,7 @@ async function supabaseBackend() {
     async acceptInvite(code) { return must(await sb.rpc('accept_invite', { p_code: code })); },
     async remove(other) { const me = await uidNow(); must(await sb.from('friendships').delete().or(`and(requester.eq.${me},addressee.eq.${other}),and(requester.eq.${other},addressee.eq.${me})`)); },
     async feed(userId) {
-      let q = sb.from('activity').select('id, user_id, kind, payload, created_at, author:profiles!activity_user_id_fkey(id, username, display_name), cheers(user_id)').order('created_at', { ascending: false }).limit(40);
+      let q = sb.from('activity').select('id, user_id, kind, payload, created_at, author:profiles!activity_user_id_fkey(id, username, display_name, avatar_path), cheers(user_id)').order('created_at', { ascending: false }).limit(40);
       if (userId) q = q.eq('user_id', userId);
       return must(await q);
     },
@@ -174,7 +181,25 @@ export const needsUsername = () => !!user && me?.username_confirmed === false;
 export async function signOut() { await flush().catch(() => {}); if (!user?.offline) await api.signOut(); user = null; me = null; try { localStorage.removeItem(BASE_KEY); localStorage.removeItem(ME_KEY); localStorage.removeItem(RKEY); localStorage.removeItem(PUSH_KEY); } catch {} }
 export const resetPassword = (email) => api.resetPassword(email);
 export const usernameAvailable = (u) => api.usernameAvailable(u);
-export async function updateDisplayName(name) { await api.updateProfile(user.id, { display_name: name }); me.display_name = name; }
+export async function updateDisplayName(name) { await api.updateProfile(user.id, { display_name: name }); me.display_name = name; saveMe(); }
+function saveMe() { try { localStorage.setItem(ME_KEY, JSON.stringify(me)); } catch {} }
+// Foto de perfil (ya recortada y reducida). Se borra la anterior para no dejar archivos sueltos.
+export async function setAvatar(blob) {
+  if (!navigator.onLine) throw new Error('Necesitas conexión para cambiar tu foto.');
+  const old = me?.avatar_path;
+  const path = await api.uploadAvatar(user.id, blob);
+  try { await api.updateProfile(user.id, { avatar_path: path }); }
+  catch (e) { api.removeAvatarFile(path).catch(() => {}); throw e; }
+  me = { ...me, avatar_path: path }; saveMe();
+  if (old && old !== path) api.removeAvatarFile(old).catch(() => {});
+}
+export async function clearAvatar() {
+  if (!navigator.onLine) throw new Error('Necesitas conexión para quitar tu foto.');
+  const old = me?.avatar_path;
+  await api.updateProfile(user.id, { avatar_path: null });
+  me = { ...me, avatar_path: null }; saveMe();
+  if (old) api.removeAvatarFile(old).catch(() => {});
+}
 
 // ---------- Sincronización ----------
 // Las copias del celular y de la nube se MEZCLAN (ver sync.js): nada se pierde por usar dos aparatos
