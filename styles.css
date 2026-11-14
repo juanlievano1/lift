@@ -134,7 +134,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .rtrack span { display: block; height: 100%; background: var(--accent); transition: width 1s linear; }
 
 /* Rutinas */
-.gen { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+.gen { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 14px; }
 .gencard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 8px; color: var(--ink); font: inherit; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; cursor: pointer; font-size: 14px; }
 .gencard:active { background: var(--surface-2); }
 .gi { font-size: 22px; }
@@ -341,6 +341,7 @@ details.day[open] summary::before { transform: rotate(90deg); }
 body.onboarding .composer { bottom: 12px; }
 .composer textarea { margin: 0; border: 0; background: transparent; resize: none; padding: 9px 10px; max-height: 140px; }
 .composer textarea:focus { outline: none; }
+.composer:focus-within { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 .composer .btn { min-width: 46px; padding: 8px 12px; border-radius: 14px; }
 .chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 8px; scrollbar-width: none; }
 .chipbtn { flex: none; background: var(--surface); border: 1px solid var(--line); border-radius: 99px; padding: 7px 12px; font: inherit; font-size: 14px; color: var(--ink-2); cursor: pointer; }
@@ -434,9 +435,9 @@ button.chip { border: 1px solid var(--line); cursor: pointer; text-transform: no
 .tournav svg { width: 20px; height: 20px; fill: currentColor; }
 .tourme { display: flex; gap: 10px; align-items: center; text-align: left; background: var(--surface-2); border-radius: var(--radius); padding: 10px 12px; margin: 0 0 12px; }
 .tourme .avatar { flex: none; }
-.dots { display: flex; justify-content: center; gap: 6px; margin: 4px 0 14px; }
-.dots span { width: 7px; height: 7px; border-radius: 99px; background: var(--line); }
-.dots span.on { width: 20px; background: var(--accent); }
+.dots:not(.key) { display: flex; justify-content: center; gap: 6px; margin: 4px 0 14px; }
+.dots:not(.key) span { width: 7px; height: 7px; border-radius: 99px; background: var(--line); }
+.dots:not(.key) span.on { width: 20px; background: var(--accent); }
 .tour .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .firsttips ul { margin: 6px 0 12px; padding-left: 18px; }
 .firsttips li { margin-bottom: 6px; }
@@ -450,7 +451,7 @@ details.marks summary { cursor: pointer; font-weight: 600; color: var(--ink-2); 
 /* Fase 4: primer uso y accesibilidad */
 ::placeholder { color: var(--ink-2); opacity: 0.6; }
 .howto { display: inline-block; font-size: 13px; color: var(--accent-strong); text-decoration: none; padding: 6px 0; font-weight: 600; }
-.goalhelp { margin: -4px 0 12px; line-height: 1.45; }
+.goalhelp { margin: 6px 0 12px; line-height: 1.45; }
 .summary { text-align: center; }
 .summary .prs { display: inline-block; }
 .exfoot .link { min-height: 44px; padding: 0 6px; }
@@ -493,3 +494,9 @@ details.marks summary { cursor: pointer; font-weight: 600; color: var(--ink-2); 
 .avbtn .avcam { position: absolute; right: -4px; bottom: -4px; width: 24px; height: 24px; border-radius: 50%; background: var(--surface); border: 1px solid var(--line); display: grid; place-items: center; font-size: 12px; }
 .avbtn.busy .avatar { opacity: 0.4; }
 .avbtn.busy::after { content: ''; position: absolute; inset: 14px; border: 3px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+
+/* Revisión nov 2026 */
+:where(a:not([class])) { color: var(--accent-strong); } /* enlaces sueltos (p. ej. la política de privacidad) salían en azul del navegador */
+.donetoday { border-left: 4px solid var(--good); }
+.donetoday p { margin: 0; }
+.restbar .link { min-width: 44px; min-height: 44px; } /* blanco fácil para el pulgar en pleno descanso */

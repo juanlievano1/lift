@@ -2,16 +2,19 @@
 // Usa Supabase si está configurado; en modo prueba (?mock=1) usa un servidor simulado en el navegador.
 
 import { SUPABASE_URL, SUPABASE_ANON_KEY, DEMO, VAPID_PUBLIC_KEY } from './config.js';
-import { db, onChange, replaceState, cloudData, update } from './db.js';
+import { db, onChange, replaceState, cloudData, update, reloadIfNewer } from './db.js';
 import { mergeDocs, hashOf, baseOf, strip } from './sync.js';
 
 const SDK = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/+esm';
 
 const params = new URLSearchParams(location.search);
-if (params.get('mock') === '1') localStorage.setItem('forja.mock', '1');
-if (params.get('mock') === '0') localStorage.removeItem('forja.mock');
 const realCloud = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
-export const mockMode = localStorage.getItem('forja.mock') === '1' || (DEMO && !realCloud && params.get('mock') !== '0');
+// El servidor simulado (?mock=1) solo se puede activar en el computador de desarrollo o en la versión demo:
+// en la app publicada, un enlace con ?mock=1 dejaba el celular pegado a cuentas falsas y podía borrar datos sin sincronizar.
+const DEV = DEMO || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+if (DEV && params.get('mock') === '1') localStorage.setItem('forja.mock', '1');
+if (!DEV || params.get('mock') === '0') localStorage.removeItem('forja.mock');
+export const mockMode = (DEV && localStorage.getItem('forja.mock') === '1') || (DEMO && !realCloud && params.get('mock') !== '0');
 export const enabled = mockMode || realCloud;
 
 let api = null;       // backend (real o simulado)
@@ -26,9 +29,12 @@ async function supabaseBackend() {
   const uidNow = async () => (await sb.auth.getUser()).data.user?.id;
 
   return {
-    async session() { const { data } = await sb.auth.getSession(); return data.session?.user || null; },
+    // Si la sesión no se pudo renovar (señal mala), es un fallo de red, no un "cierra sesión".
+    async session() { const { data, error } = await sb.auth.getSession(); if (error && !data?.session) throw error; return data.session?.user || null; },
     async signUp({ email, password, username, displayName }) {
       const data = must(await sb.auth.signUp({ email, password, options: { data: { username: username.toLowerCase(), display_name: displayName }, emailRedirectTo: returnUrl() } }));
+      // Correo ya registrado (p. ej. entró antes con Google): Supabase no da error, pero tampoco manda correo.
+      if (data.user && !data.session && data.user.identities?.length === 0) throw new Error('Ese correo ya tiene una cuenta. Inicia sesión.');
       return { user: data.user, needsConfirm: !data.session };
     },
     async signIn({ email, password }) { return must(await sb.auth.signInWithPassword({ email, password })).user; },
@@ -46,13 +52,18 @@ async function supabaseBackend() {
       must(await sb.storage.from('avatars').upload(path, blob, { contentType: 'image/jpeg', cacheControl: '31536000', upsert: false }));
       return path;
     },
-    async removeAvatarFile(path) { await sb.storage.from('avatars').remove([path]); },
+    async removeAvatarFile(path) { const { error } = await sb.storage.from('avatars').remove([path]); if (error) throw new Error(error.message); },
     async pull(id) { return must(await sb.from('user_data').select('data, updated_at').eq('user_id', id).maybeSingle()); },
     async push(id, data) { must(await sb.from('user_data').upsert({ user_id: id, data, updated_at: new Date().toISOString() })); },
     async friendships() {
       return must(await sb.from('friendships').select('requester, addressee, status, created_at, req:profiles!friendships_requester_fkey(id, username, display_name, avatar_path), adr:profiles!friendships_addressee_fkey(id, username, display_name, avatar_path)'));
     },
-    async search(q) { return must(await sb.from('profiles').select('id, username, display_name, avatar_path').ilike('username', `${q.toLowerCase().replace(/[%_]/g, '')}%`).limit(10)); },
+    async search(q) {
+      // El guion bajo es válido en un @usuario: se busca literal (antes se borraba y "juan_f" no encontraba a nadie).
+      const safe = q.toLowerCase().replace(/[^a-z0-9_.]/g, '').replace(/_/g, '\\_');
+      if (!safe) return [];
+      return must(await sb.from('profiles').select('id, username, display_name, avatar_path').ilike('username', `${safe}%`).limit(10));
+    },
     async byUsername(u) { return must(await sb.from('profiles').select('id, username, display_name, avatar_path').eq('username', u.toLowerCase()).maybeSingle()); },
     async request(to) { must(await sb.from('friendships').insert({ requester: await uidNow(), addressee: to })); },
     async accept(from) { must(await sb.from('friendships').update({ status: 'accepted' }).eq('requester', from).eq('addressee', await uidNow())); },
@@ -79,6 +90,7 @@ async function supabaseBackend() {
       return Object.fromEntries((data || []).map((r) => [r.user_id, r]));
     },
     async unshareRoutine(id) { must(await sb.from('shared_routines').delete().eq('user_id', id)); },
+    async dropPush(endpoint) { must(await sb.from('push_subscriptions').delete().eq('endpoint', endpoint)); },
     async savePush(s) { must(await sb.rpc('save_push_subscription', { p_endpoint: s.endpoint, p_p256dh: s.p256dh, p_auth: s.auth })); },
     async restTimer(id, endsAt, next) { must(await sb.from('rest_timers').upsert({ user_id: id, ends_at: endsAt, next, sent: false, updated_at: new Date().toISOString() })); },
     async cancelRest(id) { must(await sb.from('rest_timers').delete().eq('user_id', id)); },
@@ -102,7 +114,7 @@ async function supabaseBackend() {
       }
       return data;
     },
-    onAuth(cb) { sb.auth.onAuthStateChange((_e, session) => cb(session?.user || null)); },
+    onAuth(cb) { sb.auth.onAuthStateChange((ev, session) => cb(session?.user || null, ev)); },
   };
 }
 
@@ -114,10 +126,13 @@ function translate(msg = '') {
   if (m.includes('password should be')) return 'La contraseña debe tener al menos 6 caracteres.';
   if (m.includes('duplicate key') && m.includes('friendships')) return 'Ya hay una solicitud entre ustedes.';
   if (m.includes('duplicate key') && m.includes('username')) return 'Ese nombre de usuario ya está en uso.';
-  if (m.includes('provider is not enabled')) return 'El inicio con Google aún no está activado en el servidor.';
+  if (m.includes('provider is not enabled')) return 'Entrar con Google no está disponible por ahora. Usa tu correo.';
   if (m.includes('database error saving new user')) return 'Ese nombre de usuario ya está en uso.';
   if (m.includes('rate limit')) return 'Demasiados intentos. Espera un momento.';
-  if (m.includes('failed to fetch') || m.includes('network')) return 'Sin conexión. Inténtalo de nuevo.';
+  if (m.includes('for security purposes')) return 'Acabas de pedirlo. Espera un minuto e inténtalo de nuevo.';
+  // iPhone dice "Load failed" donde Chrome dice "Failed to fetch".
+  if (!navigator.onLine || /failed to fetch|load failed|network/.test(m)) return 'Sin conexión. Inténtalo de nuevo.';
+  if (m.includes('duplicate key')) return 'Eso ya estaba hecho.';
   return msg || 'Algo salió mal.';
 }
 
@@ -128,8 +143,11 @@ export const onAuthChange = (fn) => authListeners.add(fn);
 async function connect() {
   if (api) return;
   api = mockMode ? (await import('./mock.js')).mockBackend() : await supabaseBackend();
-  api.onAuth(async (nu) => {
+  api.onAuth(async (nu, ev) => {
     if ((nu?.id || null) === (user?.id || null) && !user?.offline) return;
+    // Trabajando con los datos del celular (sin señal): que la sesión no se haya podido renovar NO es un cierre
+    // de sesión. Sin esto, a los ~30 s de abrir la app sin datos aparecía la pantalla de entrada en pleno entreno.
+    if (!nu && user?.offline && ev !== 'SIGNED_OUT') return;
     if (nu) await setUser(nu); else { user = null; me = null; }
     authListeners.forEach((fn) => fn(user));
   });
@@ -138,10 +156,13 @@ async function connect() {
 export async function init() {
   if (!enabled) return null;
   let failed = false;
+  const e0 = epoch;
   try {
     await connect();
     const u = await api.session();
+    if (epoch !== e0) return user; // cerró sesión mientras esto seguía en camino: no se vuelve a entrar solo
     if (u) await setUser(u);
+    else if (user?.offline && navigator.onLine) { user = null; me = null; } // arrancó con los datos del celular, pero la sesión ya no existe
   } catch (e) { console.warn('Sin conexión con la nube', e); failed = true; }
   // Sin señal (o la sesión no se pudo renovar sin internet): se entra igual con los datos de este celular.
   if (!user && db().owner && (failed || !navigator.onLine)) goOffline();
@@ -154,6 +175,23 @@ function goOffline() {
   me = cachedMe() || { id: db().owner, username: '', display_name: db().profile?.name || '', username_confirmed: true };
 }
 export const isOffline = () => !!user?.offline;
+// Arranque con señal lenta: se entra ya con los datos de este celular mientras la nube responde.
+// Solo si la sesión guardada en el celular es de la misma cuenta dueña de los datos: si otra persona acaba de
+// entrar en este celular, se espera a la nube en vez de mostrarle los datos de la cuenta anterior.
+function storedSessionUser() {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (/^sb-.+-auth-token$/.test(k)) { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v?.user?.id || v?.currentSession?.user?.id || null; }
+    }
+  } catch { /* sin sesión legible */ }
+  return null;
+}
+export function startOffline() {
+  const sid = storedSessionUser();
+  if (enabled && !user && db().owner && (!sid || sid === db().owner)) goOffline();
+  return !!user && user.id === db().owner;
+}
+let epoch = 0; // sube en cada cierre de sesión
 const ME_KEY = 'forja.me';
 const cachedMe = () => { try { const m = JSON.parse(localStorage.getItem(ME_KEY) || 'null'); return m?.id === db().owner ? m : null; } catch { return null; } };
 
@@ -170,15 +208,33 @@ async function setUser(u) {
   user = { id: u.id, email: u.email };
   try { me = await api.profile(u.id); localStorage.setItem(ME_KEY, JSON.stringify(me)); }
   catch { me = (cachedMe()?.id === u.id && cachedMe()) || { id: u.id, username: '', display_name: '', username_confirmed: true }; }
-  try { me.invite_code = await api.inviteCode(); } catch { /* sin código: el enlace usa el @usuario */ }
+  try { me.invite_code = await api.inviteCode(); localStorage.setItem(ME_KEY, JSON.stringify(me)); } catch { /* sin código: el enlace usa el @usuario */ }
 }
 
 export async function signUp(f) { const r = await api.signUp(f); if (!r.needsConfirm && r.user) await setUser(r.user); return r; }
 export async function signIn(f) { const u = await api.signIn(f); await setUser(u); return u; }
 export async function signInWithGoogle() { const u = await api.signInWithGoogle(); if (u) await setUser(u); return u; }
-export async function confirmUsername(username, displayName) { await api.confirmUsername(user.id, username, displayName); me = { ...me, username: username.toLowerCase(), display_name: displayName, username_confirmed: true }; }
+export async function confirmUsername(username, displayName) { await api.confirmUsername(user.id, username, displayName); me = { ...me, username: username.toLowerCase(), display_name: displayName, username_confirmed: true }; saveMe(); }
 export const needsUsername = () => !!user && me?.username_confirmed === false;
-export async function signOut() { await flush().catch(() => {}); if (!user?.offline) await api.signOut(); user = null; me = null; try { localStorage.removeItem(BASE_KEY); localStorage.removeItem(ME_KEY); localStorage.removeItem(RKEY); localStorage.removeItem(PUSH_KEY); } catch {} }
+// Al cerrar sesión este celular deja de recibir los avisos de descanso de la cuenta.
+async function dropPush() {
+  try {
+    if (!pushSupported()) return;
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = await reg?.pushManager?.getSubscription();
+    if (!sub) return;
+    if (user && !user.offline && navigator.onLine) await api.dropPush?.(sub.endpoint);
+    await sub.unsubscribe();
+  } catch (e) { console.warn('push', e); }
+}
+export async function signOut() {
+  await flush().catch(() => {}); await dropPush();
+  epoch++;
+  // Siempre se borra la sesión de este celular, también sin conexión: antes quedaba guardada y la cuenta
+  // volvía a entrar sola al recuperar la señal (aunque el celular ya fuera de otra persona).
+  try { await api?.signOut(); } catch (e) { console.warn('Cierre de sesión sin conexión', e); }
+  try { Object.keys(localStorage).filter((k) => /^sb-.+-auth-token/.test(k)).forEach((k) => localStorage.removeItem(k)); } catch {}
+  user = null; me = null; try { localStorage.removeItem(BASE_KEY); localStorage.removeItem(ME_KEY); localStorage.removeItem(RKEY); localStorage.removeItem(PUSH_KEY); } catch {} }
 export const resetPassword = (email) => api.resetPassword(email);
 export const usernameAvailable = (u) => api.usernameAvailable(u);
 export async function updateDisplayName(name) { await api.updateProfile(user.id, { display_name: name }); me.display_name = name; saveMe(); }
@@ -198,7 +254,7 @@ export async function clearAvatar() {
   const old = me?.avatar_path;
   await api.updateProfile(user.id, { avatar_path: null });
   me = { ...me, avatar_path: null }; saveMe();
-  if (old) api.removeAvatarFile(old).catch(() => {});
+  if (old) await api.removeAvatarFile(old).catch((e) => console.warn('No se pudo borrar la foto anterior', e));
 }
 
 // ---------- Sincronización ----------
@@ -211,15 +267,22 @@ export const hasUnsynced = () => !!user && db().owner === user.id && hashOf(clou
 
 // Trae la nube, mezcla con lo local y sube el resultado si hace falta. Devuelve true si cambió lo local.
 async function syncNow() {
-  const remote = await api.pull(user.id);
+  const uid = user.id;
+  const remote = await api.pull(uid);
+  if (user?.id !== uid) return false; // cambió la cuenta mientras llegaba la respuesta
+  reloadIfNewer(); // otra pestaña (o la app instalada) pudo guardar algo más nuevo en este mismo celular
   const rdata = strip(remote?.data || {});
   const local = cloudData();
-  const merged = mergeDocs(local, rdata, loadBase(user.id));
+  // Sin fila en la nube no hay "borrados remotos" que respetar: se sube lo local (antes vaciaba el celular).
+  const merged = mergeDocs(local, rdata, remote ? loadBase(uid) : null);
   const mh = hashOf(merged);
   const changedLocal = mh !== hashOf(local);
-  if (changedLocal) { const s = db(); replaceState({ ...merged, activeSession: s.activeSession, outbox: s.outbox }, user.id); }
-  if (mh !== hashOf(rdata) || !remote) await api.push(user.id, merged);
-  saveBase(user.id, merged);
+  // La "base" se toma ANTES de subir: lo que registres mientras la subida va en camino no puede quedar
+  // marcado como sincronizado (la siguiente sincronización lo borraba del celular).
+  const base = JSON.stringify({ user: uid, ...baseOf(merged) });
+  if (changedLocal) { const s = db(); replaceState({ ...merged, activeSession: s.activeSession, outbox: s.outbox }, uid); }
+  if (mh !== hashOf(rdata) || !remote) await api.push(uid, merged);
+  try { localStorage.setItem(BASE_KEY, base); } catch {}
   return changedLocal;
 }
 
@@ -273,7 +336,18 @@ export async function flush() { clearTimeout(timer); await pushNow(); }
 onChange(() => { if (enabled && user && !user.offline) schedule(); });
 window.addEventListener('online', () => { if (user?.offline) reconnect(); else if (user) pushNow(); });
 // Al volver a la app, trae (y mezcla) cambios hechos en otro aparato.
+// Al salir de la app (bloquear el celular justo después de terminar el entreno) se sube ya lo pendiente,
+// sin esperar el segundo y medio habitual: en segundo plano ese temporizador se congela.
+const flushSoon = () => { if (timer) flush().catch(() => {}); };
+window.addEventListener('pagehide', flushSoon);
 document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'hidden') return flushSoon();
+  if (reloadIfNewer()) authListeners.forEach((fn) => fn(user, 'pulled'));
+  // Seguía en modo sin conexión y ya hay señal: se reintenta entrar.
+  if (user?.offline && navigator.onLine) return reconnect();
+  // La primera carga de datos de esta cuenta falló (celular nuevo con mala señal): se reintenta en vez de
+  // dejar a la persona en una app vacía hasta que la reinicie.
+  if (user && !user.offline && navigator.onLine && db().owner !== user.id) return authListeners.forEach((fn) => fn(user));
   if (document.visibilityState !== 'visible' || !user || user.offline || !navigator.onLine || pushing || db().owner !== user.id) return;
   pushing = true;
   try { if (await syncNow()) authListeners.forEach((fn) => fn(user, 'pulled')); } catch {} finally { pushing = false; }
@@ -282,8 +356,10 @@ document.addEventListener('visibilitychange', async () => {
 // "Borrar mis datos": también se quita lo publicado en el feed de los amigos y la rutina compartida.
 export async function clearActivity() {
   if (!user || user.offline) return;
-  try { await api.clearActivity(user.id); } catch (e) { console.warn(e); }
-  try { await api.unshareRoutine(user.id); localStorage.removeItem(RKEY); } catch (e) { console.warn(e); }
+  // Si algo falla se avisa (antes se callaba y lo publicado seguía a la vista de los amigos).
+  await api.clearActivity(user.id);
+  await api.unshareRoutine(user.id);
+  try { localStorage.removeItem(RKEY); } catch {}
 }
 
 // ---------- Rutina compartida con amigos ----------
@@ -344,14 +420,20 @@ export function publish(kind, payload) {
   if (!enabled || !user) return;
   update((s) => s.outbox.push({ kind, payload, at: Date.now() }));
 }
+let flushing = false; // una sola subida a la vez: dos a la par publicaban cada entreno dos veces
 async function flushOutbox() {
+  if (flushing) return;
   const box = db().outbox;
   if (!box.length) return;
-  const sent = [];
-  for (const item of box) {
-    try { await api.publish(user.id, item.kind, item.payload); sent.push(item.at); } catch (e) { console.warn(e); break; }
-  }
-  if (sent.length) { db().outbox = box.filter((i) => !sent.includes(i.at)); localStorage.setItem('forja.v1', JSON.stringify(db())); }
+  flushing = true;
+  try {
+    const sent = [];
+    for (const item of box) {
+      try { await api.publish(user.id, item.kind, item.payload); sent.push(item.at); } catch (e) { console.warn(e); break; }
+    }
+    // Se quita solo lo enviado de la cola ACTUAL (pudo crecer mientras se subía).
+    if (sent.length) { db().outbox = db().outbox.filter((i) => !sent.includes(i.at)); localStorage.setItem('forja.v1', JSON.stringify(db())); }
+  } finally { flushing = false; }
 }
 
 export const feed = (userId) => api.feed(userId);
@@ -377,7 +459,11 @@ export const searchUsers = (q) => api.search(q);
 export const findUser = (u) => api.byUsername(u);
 export const requestFriend = (id) => api.request(id);
 export const acceptFriend = (id) => api.accept(id);
-export const removeFriend = (id) => api.remove(id);
+// Al eliminar a alguien, el servidor cambia tu código de invitación (el enlace viejo deja de servirle): se trae el nuevo.
+export async function removeFriend(id) {
+  await api.remove(id);
+  try { me.invite_code = await api.inviteCode(); saveMe(); } catch { /* se actualiza al volver a abrir la app */ }
+}
 
 // ---------- Coach ----------
 export async function coach(action, payload) {

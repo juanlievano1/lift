@@ -103,12 +103,12 @@ export function viewAuth() {
     ${reset ? '' : `${inAppHint()}${googleBtn(signup ? 'Registrarme con Google' : 'Entrar con Google')}<div class="divider"><span>o con tu correo</span></div>`}
     <form id="authf" class="card form" novalidate>
       ${signup ? `
-      <label>Tu nombre<input name="displayName" autocomplete="name" maxlength="40" required placeholder="Juan Liévano"></label>
-      <label>Nombre de usuario<input name="username" autocomplete="username" maxlength="20" required placeholder="juan_fit" pattern="[a-zA-Z0-9_]{3,20}" autocapitalize="none"></label>
+      <label>Tu nombre<input name="displayName" autocomplete="name" maxlength="40" required placeholder="Nombre y apellido"></label>
+      <label>Nombre de usuario<input name="username" autocomplete="username" maxlength="20" required placeholder="tu_usuario" pattern="[a-zA-Z0-9_]{3,20}" autocapitalize="none"></label>
       <p class="muted small" id="uhint">Así te encuentran tus amigos. Letras, números y _ (3 a 20).</p>` : ''}
       <label>Correo<input name="email" type="email" autocomplete="email" required placeholder="tu@correo.com" autocapitalize="none"></label>
       ${reset ? '' : `<label>Contraseña<input name="password" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}" required minlength="6" placeholder="Mínimo 6 caracteres"></label>`}
-      <p class="formerr" id="aerr" hidden></p>
+      <p class="formerr" id="aerr" role="alert" hidden></p>
       <button class="btn primary big" type="submit">${signup ? 'Crear cuenta' : reset ? 'Enviar enlace' : 'Entrar'}</button>
       ${!signup && !reset ? '<button class="link" type="button" data-act="authMode" data-mode="reset">¿Olvidaste tu contraseña?</button>' : ''}
     </form>
@@ -177,7 +177,7 @@ function viewUsername(head) {
       <label>Tu nombre<input name="displayName" maxlength="40" required value="${esc(me.display_name || '')}" autocomplete="name"></label>
       <label>Nombre de usuario<input name="username" maxlength="20" required value="${esc(me.username || '')}" autocapitalize="none" autocomplete="username"></label>
       <p class="muted small" id="uhint">Letras, números y _ (3 a 20).</p>
-      <p class="formerr" id="aerr" hidden></p>
+      <p class="formerr" id="aerr" role="alert" hidden></p>
       <button class="btn primary big" type="submit">Continuar</button>
     </form>
     <button class="link center-block" data-act="logout">Usar otra cuenta</button>`;
@@ -219,6 +219,11 @@ export async function consumeInvite() {
   consuming = true;
   try {
     if (inv.code) {
+      // Nunca se aceptan amistades sin preguntar: quien abre un enlace debe saber con quién queda como amigo.
+      const o = await cloud.inviteOwner(inv.code);
+      if (!o || o.username === cloud.me?.username) { cloud.clearInvite(); return; }
+      // (Si entró desde la pantalla de bienvenida ya vio "X te invitó": inv.name queda guardado y no se repite la pregunta.)
+      if (!inv.name && !confirm(`¿Quedar como amigos con ${o.display_name || `@${o.username}`}? Verá los entrenos y la rutina que compartes.`)) { cloud.clearInvite(); return; }
       const who = await cloud.acceptInvite(inv.code);
       cloud.clearInvite();
       if (who) { toast(`¡Listo! @${who} y tú ya son amigos`); rerender(); }

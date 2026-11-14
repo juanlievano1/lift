@@ -40,7 +40,11 @@ export function viewAmigos() {
     return;
   }
   const sub = location.hash.split('/')[1];
-  if (sub) return viewFriend(decodeURIComponent(sub));
+  if (sub) {
+    let u;
+    try { u = decodeURIComponent(sub); } catch { location.hash = 'amigos'; return; } // enlace mal formado
+    return viewFriend(u);
+  }
   main.innerHTML = `
   <header class="top"><h1>Amigos</h1><button class="btn primary sm" data-act="invite">Invitar</button></header>
   <section class="card">
@@ -103,8 +107,9 @@ async function loadFriends() {
 const mondayOf = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.getTime(); };
 // "2 de 4 entrenos ●●○○": los hechos esta semana contra los días de su rutina.
 function weekLine(done, days) {
+  days = Math.min(7, Number(days) || 0); // la rutina de un amigo llega de la red: nunca más de 7 puntos
   if (!days) return `Esta semana: <b>${done}</b> entreno${done === 1 ? '' : 's'}`;
-  const dots = Array.from({ length: Math.max(days, done) }, (_, i) => `<i class="${i < done ? 'on' : ''}"></i>`).join('');
+  const dots = Array.from({ length: Math.min(14, Math.max(days, done)) }, (_, i) => `<i class="${i < done ? 'on' : ''}"></i>`).join('');
   return `Esta semana: <b>${done} de ${days}</b> entrenos <span class="dots" aria-hidden="true">${dots}</span>`;
 }
 function myCard() {
@@ -205,8 +210,12 @@ function progressCard(items, name) {
 function routineCard(r, name, open = false) {
   if (!r || !Array.isArray(r.days)) return `<p class="muted small center">${name} no comparte su rutina.</p>`;
   return `<section class="card"><h3>Rutina de ${name}</h3><p class="muted small">${esc(r.name)} · ${r.days.length} día${r.days.length === 1 ? '' : 's'} por semana</p>
-    ${r.days.map((d) => `<details class="day" ${open ? 'open' : ''}><summary><b>${esc(d?.name)}</b> <span class="muted small">· ${(d?.exercises || []).length} ejercicios</span></summary>
-      <ul class="mini">${(Array.isArray(d?.exercises) ? d.exercises : []).map((e) => `<li><span>${esc(e?.name)}</span><span class="muted">${Number(e?.sets) || '—'} × ${Number(e?.repMin) || ''}–${Number(e?.repMax) || ''}</span></li>`).join('')}</ul></details>`).join('')}
+    ${r.days.slice(0, 14).map((d) => {
+      // Lo que comparte un amigo es texto libre que llega de la red: solo se aceptan listas de verdad y números.
+      const exs = Array.isArray(d?.exercises) ? d.exercises.slice(0, 40) : [];
+      return `<details class="day" ${open ? 'open' : ''}><summary><b>${esc(d?.name)}</b> <span class="muted small">· ${exs.length} ejercicios</span></summary>
+      <ul class="mini">${exs.map((e) => `<li><span>${esc(e?.name)}</span><span class="muted">${Number(e?.sets) || '—'} × ${Number(e?.repMin) || ''}–${Number(e?.repMax) || ''}</span></li>`).join('')}</ul></details>`;
+    }).join('')}
   </section>`;
 }
 

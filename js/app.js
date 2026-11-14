@@ -13,6 +13,7 @@ import { viewAmigos, publishSession } from './social.js';
 import { viewCoach, viewCrear, runPostSession, maybeWeeklyReview, coachBanner } from './coachui.js';
 
 const main = $('#main');
+try { localStorage.removeItem('lift.tema'); } catch {} // resto de los temas de prueba (antes era un script en index.html)
 
 let draft = null;          // rutina en edición
 let pickerCb = null;       // callback del selector de ejercicios
@@ -20,6 +21,7 @@ let restTimer = null;      // temporizador de descanso
 let progressExercise = ''; // ejercicio seleccionado en Progreso
 let planExercise = '';     // ejercicio seleccionado en Plan vs real
 let booted = false;
+let splitN = null;         // días elegidos en "¿Cómo repartes tus días?" (aún sin guardar en el perfil)
 
 // ---------- Navegación ----------
 Object.assign(routes, { hoy: viewHoy, entreno: viewEntreno, rutinas: viewRutinas, progreso: viewProgreso, perfil: viewPerfil, editar: viewEditar, dividir: viewSplit, amigos: viewAmigos, coach: viewCoach, crear: viewCrear });
@@ -106,6 +108,20 @@ function profileForm(p = {}) {
   </details>`;
 }
 
+// Al cambiar kg ↔ lb, las marcas escritas se convierten a la unidad nueva (antes "100" en kilos se guardaba
+// como 100 libras, y al revés los pesos sugeridos salían 2,2 veces más pesados).
+function bindUnitMarks(form) {
+  const sel = form?.elements.unit;
+  if (!sel) return;
+  let cur = sel.value === 'lb' ? 'lb' : 'kg';
+  sel.addEventListener('change', () => {
+    const next = sel.value === 'lb' ? 'lb' : 'kg';
+    form.querySelectorAll('input[name^="mk_"]').forEach((i) => { const v = parseNum(i.value); if (v > 0) i.value = numStr(Math.round(inUnit(fromUnit(v, cur), next) * 2) / 2); }); // al medio kilo o media libra
+    cur = next;
+  });
+}
+const validWeight = (kg) => kg >= 25 && kg <= 350;
+
 function readProfile(form) {
   const fd = new FormData(form);
   const f = Object.fromEntries(fd);
@@ -128,6 +144,7 @@ function viewOnboarding() {
   <form id="onb" class="card form">${profileForm({ name })}
     <button class="btn primary big" type="submit">Continuar</button>
   </form>`;
+  bindUnitMarks($('#onb'));
   $('#onb').addEventListener('change', (e) => {
     // Máximo 2 prioridades: más que eso deja de ser prioridad.
     if (e.target.name !== 'prio') return;
@@ -137,6 +154,7 @@ function viewOnboarding() {
   $('#onb').addEventListener('submit', (e) => {
     e.preventDefault();
     const p = readProfile(e.target);
+    if (!validWeight(p.weight)) { toast('Escribe tu peso en kg, p. ej. 78,5'); e.target.elements.weight?.focus(); return; }
     update((s) => {
       s.profile = p;
       s.weights.push({ id: uid(), date: today(), kg: p.weight });
@@ -158,9 +176,9 @@ function generateSciencePlan() {
 function tourSteps() {
   const ai = ADJUST_ENABLED && cloud.enabled;
   return [
-    { tab: 'hoy', icon: '🏋️', title: 'Hoy', text: 'Aquí está el entreno que te toca, con el peso sugerido para cada ejercicio. Tocas <b>Empezar</b> y la app te lleva serie por serie, con el descanso cronometrado.' },
+    { tab: 'hoy', icon: '🏋️', title: 'Hoy', text: 'Aquí está el entreno que te toca, con el peso sugerido para cada ejercicio. Toca <b>Empezar entreno</b> y la app te lleva serie por serie, con el descanso cronometrado.' },
     { tab: 'rutinas', icon: '📋', title: 'Rutina', text: `Tus días y ejercicios. Puedes editarlos, elegir cómo progresar o importar otra rutina desde un PDF o fotos.${ai ? ' ¿No te gusta algo? Toca <b>Pídenos cambios</b> y la IA la ajusta.' : ''}` },
-    cloud.enabled && { tab: 'amigos', icon: '🤝', title: 'Amigos', text: 'Invita a tu parche con tu link. Ves sus entrenos y récords, y les das <b>fuerzas</b> 💪 cuando entrenan.' },
+    cloud.enabled && { tab: 'amigos', icon: '🤝', title: 'Amigos', text: 'Invita a tu parche con tu enlace. Ves sus entrenos y récords, y les das <b>fuerzas</b> 💪 cuando entrenan.' },
     { tab: 'progreso', icon: '📈', title: 'Progreso', text: 'Tus récords, tu peso corporal y cómo vas subiendo en cada ejercicio, semana a semana.' },
   ].filter(Boolean);
 }
@@ -189,7 +207,7 @@ function openTour(i = 0) {
 const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 const standalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
 let installEvt = null;
-window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if (location.hash === '' || location.hash === '#hoy') render(); });
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if (!busy() && !document.body.classList.contains('onboarding') && (location.hash === '' || location.hash === '#hoy')) render(); }); // sin repintar encima de un formulario a medio llenar
 function installCard(s) {
   if (standalone() || s.settings.installTipDone || !(IOS || installEvt)) return '';
   return `<section class="card tipcard"><p class="small"><b>📲 Instala Lift en tu celular.</b> ${IOS
@@ -208,8 +226,9 @@ function viewHoy() {
   const wk = plan ? currentWeek(plan) : 1;
   const info = plan ? weekInfo(plan, wk) : null;
   const recs = planRecs(plan).filter((r) => r.level !== 'info' || r.key === 'fin');
+  const doneToday = [...s.sessions].reverse().find((x) => x.date === today());
   const hour = new Date().getHours();
-  const hi = hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
+  const hi =hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
   const [rlo, rhi] = weightRateTarget(s.profile.goal);
   const rateOk = ws?.rate != null && ws.rate >= rlo - 0.05 && ws.rate <= rhi + 0.05;
 
@@ -219,9 +238,12 @@ function viewHoy() {
   ${coachBanner()}
   ${installCard(s)}
 
+  ${doneToday && !s.activeSession ? `
+  <section class="card donetoday"><p><b>✓ Hecho hoy:</b> ${esc(doneToday.dayName)} · ${Number(doneToday.durationMin) || 0} min · ${doneToday.exercises.reduce((n, e) => n + e.sets.length, 0)} series${doneToday.prs?.length ? ` · 🏆 ${doneToday.prs.length} récord${doneToday.prs.length === 1 ? '' : 's'}` : ''}</p></section>` : ''}
+
   ${s.activeSession ? `
   <section class="card accent">
-    <p class="eyebrow">Entreno en curso</p>
+    <p class="eyebrow">${s.activeSession.date !== today() ? `Entreno sin terminar del ${esc(fmtDate(s.activeSession.date))}` : 'Entreno en curso'}</p>
     <h2>${esc(s.activeSession.dayName)}</h2>
     <p class="muted">${s.activeSession.exercises.reduce((a, e) => a + e.sets.filter((x) => x.done).length, 0)} series hechas</p>
     <a class="btn primary big" href="#entreno">Continuar</a>
@@ -232,8 +254,8 @@ function viewHoy() {
     <h2>${esc(day.name)}</h2>
     <p class="muted">${info.deload ? '🔋 ' : ''}${info.mode === 'doble' ? '' : esc(info.label) + ' · '}⏱ ≈ ${estimateMinutes(day)} min · ${esc(day.focus || '')}</p>
     <ul class="mini">${day.exercises.map((e) => { const rx = prescribe(plan, s.sessions, e, wk, s.profile); return `<li><span>${esc(e.name)}</span><span class="muted">${rxLabel(rx, unitOf(s.profile, e.name))}</span></li>`; }).join('')}</ul>
-    <div class="actions"><button class="btn primary big" data-act="start" data-day="${day.id}">Empezar entreno</button></div>
-    ${plan.days.length > 1 ? `<button class="link" data-act="skipDay">Hacer otro día</button>` : ''}
+    <div class="actions"><button class="btn ${doneToday ? 'ghost' : 'primary big'}" data-act="start" data-day="${day.id}">${doneToday ? 'Empezar otro entreno hoy' : 'Empezar entreno'}</button></div>
+    ${plan.days.length > 1 ? `<button class="link" data-act="skipDay">Elegir otro día de la rutina</button>` : ''}
   </section>` : `
   <section class="card"><h2>Aún no tienes rutina</h2><p class="muted">Créala en un minuto o arma la tuya.</p><a class="btn primary" href="#rutinas">Crear mi rutina</a></section>`}
 
@@ -248,9 +270,9 @@ function viewHoy() {
   ${recs.length ? `<a class="card recbanner ${recs[0].level}" href="#rutinas"><b>${esc(recs[0].title)}</b><span class="muted small">${recs.length > 1 ? `y ${recs.length - 1} ajuste${recs.length > 2 ? 's' : ''} más · ` : ''}Ver en tu rutina ›</span></a>` : ''}
 
   <section class="stats">
-    <div class="stat"><span class="eyebrow">Esta semana</span><b>${weekCount}<small> / ${s.profile.days}</small></b><span class="muted">entrenos</span></div>
+    <div class="stat"><span class="eyebrow">Esta semana</span><b>${weekCount}<small> / ${plan?.days.length || Number(s.profile.days) || 0}</small></b><span class="muted">entrenos</span></div>
     <div class="stat"><span class="eyebrow">Peso (media 7 d)</span><b>${ws ? n1(ws.nowAvg) : '—'}<small> kg</small></b>
-      <span class="${ws?.rate == null ? 'muted' : rateOk ? 'good' : 'warn'}">${ws?.rate == null ? 'Registra más días' : (ws.rate > 0 ? '+' : '') + n1(ws.rate) + ' %/sem'}</span></div>
+      <span class="${ws?.rate == null ? 'muted' : rateOk ? 'good' : 'warn'}">${ws?.rate == null ? 'Pésate unos días más' : (ws.rate > 0 ? '+' : '') + n1(ws.rate) + ' %/sem'}</span></div>
   </section>
 
   <section class="card">
@@ -266,7 +288,7 @@ function viewHoy() {
   $('#wform').addEventListener('submit', (e) => {
     e.preventDefault();
     const kg = parseNum(new FormData(e.target).get('kg'));
-    if (!kg) return toast('Escribe tu peso, p. ej. 78,5');
+    if (!(kg >= 25 && kg <= 350)) return toast('Escribe tu peso en kg, p. ej. 78,5'); // evita 0, negativos y dedazos como 785
     update((s2) => {
       const d = today();
       const ex = s2.weights.find((w) => w.date === d);
@@ -289,7 +311,7 @@ function startSession(dayId) {
   update((st) => {
     st.activeSession = {
       id: uid(),
-      planId: plan?.id || null,
+      planId: day ? plan.id : null, // un entreno libre no cuenta como día de la rutina
       dayId: day?.id || null,
       dayName: day?.name || 'Entreno libre',
       week: day ? weekInfo(plan, wk).week : null,
@@ -341,8 +363,9 @@ function viewEntreno() {
     <button class="btn ghost big" data-act="start" data-day="">Entreno libre</button>`;
     return;
   }
-  const done = a.exercises.reduce((x, e) => x + e.sets.filter((z) => z.done).length, 0);
-  const total = a.exercises.reduce((x, e) => x + e.sets.length, 0);
+  // El avance cuenta solo series de trabajo (el calentamiento no).
+  const done = a.exercises.reduce((x, e) => x + e.sets.filter((z) => z.done && !z.warm).length, 0);
+  const total = a.exercises.reduce((x, e) => x + e.sets.filter((z) => !z.warm).length, 0);
   main.innerHTML = `
   <header class="top"><div><p class="eyebrow">${a.week ? `Semana ${a.week} · ` : ''}En curso · <span id="elapsed"></span></p><h1>${esc(a.dayName)}</h1></div>
     <button class="btn ghost sm" data-act="cancelSession">Descartar</button></header>
@@ -382,7 +405,9 @@ function platesText(e, u) {
   if (lib?.equip !== 'barra') return '';
   const work = e.sets.find((x) => !x.done && !x.warm && Number(x.kg) > 0) || e.sets.find((x) => !x.warm && Number(x.kg) > 0);
   if (!work) return '';
-  const bar = inUnit(barMinKg(lib), u);
+  // En libras las barras son de 45 (olímpica) y 20 (EZ), no la conversión exacta de 20 y 10 kg (44 y 22).
+  const barKg = barMinKg(lib);
+  const bar = u === 'lb' ? ({ 20: 45, 10: 20 }[barKg] ?? inUnit(barKg, u)) : barKg;
   let side = (inUnit(Number(work.kg), u) - bar) / 2;
   if (side <= 0) return `Solo la barra (${numStr(bar)} ${u})`;
   const out = [];
@@ -535,7 +560,7 @@ function finishSession() {
     const prev = Math.max(0, ...s.sessions.flatMap((ss) => ss.exercises.filter((z) => z.name === e.name).flatMap((z) => z.sets.map((x) => e1rm(Number(x.kg), Number(x.reps))))));
     if (best > 0 && prev > 0 && best > prev) prs.push(e.name);
   }
-  const session = { id: a.id, date: a.date, planId: a.planId, dayId: a.dayId, dayName: a.dayName, week: a.week || null, durationMin: Math.round((Date.now() - a.startedAt) / 60000), notes: a.notes || '', exercises: exs.map(({ hint, ...rest }) => rest), prs };
+  const session = { id: a.id, date: a.date, planId: a.planId, dayId: a.dayId, dayName: a.dayName, week: a.week || null, durationMin: sessionMinutes(a), notes: a.notes || '', exercises: exs.map(({ hint, ...rest }) => rest), prs };
   update((st) => {
     st.sessions.push(session);
     st.activeSession = null;
@@ -553,6 +578,14 @@ function finishSession() {
 }
 
 // Resumen al terminar: lo que hiciste, los récords y, la primera vez, una felicitación.
+// "2 de 4 esta semana": cómo vas contra los días de tu rutina.
+function weekLineSummary() {
+  const s = db();
+  const n = s.sessions.filter((x) => new Date(x.date + 'T12:00:00') >= weekStart()).length;
+  const goal = activePlan()?.days.length || Number(s.profile?.days) || 0;
+  if (!goal) return '';
+  return `<p class="small"><b>${n} de ${goal}</b> entrenos esta semana${n >= goal ? ' · ¡semana completa! 🎉' : ''}</p>`;
+}
 function showSummary(session, prs) {
   const sets = session.exercises.reduce((n, e) => n + e.sets.length, 0);
   const first = db().sessions.length === 1;
@@ -560,7 +593,8 @@ function showSummary(session, prs) {
     <div class="tourico" aria-hidden="true">${prs.length ? '🏆' : '💪'}</div>
     <h2>${first ? '¡Primer entreno hecho!' : '¡Entreno guardado!'}</h2>
     <p class="muted">${esc(session.dayName)} · ${session.durationMin} min · ${sets} serie${sets === 1 ? '' : 's'} · ${session.exercises.length} ejercicio${session.exercises.length === 1 ? '' : 's'}</p>
-    ${prs.length ? `<p class="prs">Récord en ${prs.map(esc).join(', ')}</p>` : ''}
+    ${prs.length ? `<p class="prs">🏆 Récord personal en ${prs.map(esc).join(', ')}</p>` : ''}
+    ${weekLineSummary()}
     <p class="small">${first ? 'Lo más difícil ya lo hiciste: empezar. La próxima vez la app ajusta los pesos con lo que registraste hoy.' : 'La próxima vez la app ajusta los pesos con lo que registraste hoy.'}</p>
     <button class="btn primary big" data-act="closeModal">Listo</button></div>`);
 }
@@ -582,13 +616,30 @@ function shareSession(session) {
 
 // ---------- Temporizador de descanso ----------
 // ctx: { ex, next } para mostrar en la pantalla de bloqueo qué viene después.
+// Duración real: hasta la última serie marcada (+10 min de margen). Un entreno olvidado y terminado
+// al otro día ya no queda con 1.400 minutos ni se publica así a los amigos.
+function sessionMinutes(a) {
+  const end = Math.min(Date.now(), (a.lastSetAt || Date.now()) + 10 * 60000);
+  return Math.max(1, Math.round((end - a.startedAt) / 60000));
+}
+// El descanso se guarda en el celular: si el sistema cierra la app mientras cambias la música, al volver sigue la cuenta.
+const REST_KEY = 'forja.rest';
+function keepRest() { try { if (restTimer) localStorage.setItem(REST_KEY, JSON.stringify(restTimer)); else localStorage.removeItem(REST_KEY); } catch {} }
+function restoreRest() {
+  try {
+    const r = JSON.parse(localStorage.getItem(REST_KEY) || 'null');
+    if (r && r.end > Date.now() && r.total > 0 && db().activeSession) restTimer = { end: Number(r.end), total: Number(r.total), ex: String(r.ex || ''), next: String(r.next || '') };
+    else localStorage.removeItem(REST_KEY);
+  } catch {}
+}
 function startRest(sec, ctx = {}) {
   restTimer = { end: Date.now() + sec * 1000, total: sec, ...ctx };
+  keepRest();
   renderRestBar();
   // Aviso del servidor al terminar (llega aunque el celular esté bloqueado y sin pausar la música).
   cloud.scheduleRestPush(restTimer.end, restTimer.next);
 }
-function stopRest() { restTimer = null; renderRestBar(); lock.clearRestInfo(); cloud.cancelRestPush(); }
+function stopRest() { restTimer = null; keepRest(); renderRestBar(); lock.clearRestInfo(); cloud.cancelRestPush(); }
 // Al bloquear el celular o salir de la app durante el descanso: aviso con la hora a la que termina.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && restTimer) {
@@ -619,6 +670,7 @@ function renderRestBar() {
     else if (!cloud.pushActive()) lock.notify('¡Vamos con la siguiente serie!', restTimer.next || 'Terminó tu descanso');
     toast('¡Vamos con la siguiente serie!');
     restTimer = null;
+    keepRest();
     bar.innerHTML = '';
     setTimeout(renderRestBar, 50);
     return;
@@ -626,10 +678,21 @@ function renderRestBar() {
   clearTimeout(renderRestBar.t);
   renderRestBar.t = setTimeout(renderRestBar, 1000);
 }
+// Un solo canal de audio para toda la sesión (antes se creaba uno por descanso y nunca se cerraba: el navegador
+// termina negándolos y el pitido dejaba de sonar). Se despierta con el toque en ✓, que es cuando el celular lo permite.
+let audio = null;
+function audioCtx() {
+  try {
+    audio ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume().catch(() => {});
+  } catch {}
+  return audio;
+}
 function beep() {
   if (!db().settings.restSound) return;
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = audioCtx();
+    if (!ctx) return;
     const o = ctx.createOscillator(); const g = ctx.createGain();
     o.connect(g); g.connect(ctx.destination); o.frequency.value = 880; g.gain.value = 0.15;
     o.start(); o.stop(ctx.currentTime + 0.25);
@@ -739,8 +802,9 @@ function frequencyText(plan) {
 }
 
 function viewSplit() {
-  const p = db().profile;
-  const days = Math.max(2, Math.min(6, Number(p.days) || 3));
+  // Mirar otras cantidades de días no cambia el perfil: solo se guarda al elegir una división.
+  const days = Math.max(2, Math.min(6, Number(splitN ?? db().profile.days) || 3));
+  const p = { ...db().profile, days };
   const first = !db().plans.length;
   main.innerHTML = `
   <header class="top"><div><h1>¿Cómo repartes tus días?</h1><p class="muted small">Elige la que más te guste: cambian cuántas veces por semana trabajas cada músculo y en qué se enfoca cada día.</p></div>
@@ -785,7 +849,7 @@ async function sendChanges() {
   try {
     const slim = { name: plan.name, days: plan.days.map((d) => ({ name: d.name, exercises: d.exercises.map(({ name, muscle, kind, sets, repMin, repMax, rir, restSec }) => ({ name, muscle, kind, sets, repMin, repMax, rir, restSec })) })) };
     const res = await cloud.adjustPlan({ plan: slim, profile: db().profile, request });
-    if (!res?.plan?.days?.length) throw new Error('No pude ajustar la rutina. Prueba a decirlo de otra forma.');
+    if (!res?.plan?.days?.length) throw new Error('No pudimos ajustar la rutina. Prueba a decirlo de otra forma.');
     changeReq.result = res;
     showChangePreview(plan, res);
   } catch (err) {
@@ -861,7 +925,7 @@ function viewStart() {
 const toBase64 = (blob) => new Promise((res, rej) => {
   const r = new FileReader();
   r.onload = () => res(String(r.result).split(',')[1]);
-  r.onerror = () => rej(new Error('No pude leer el archivo.'));
+  r.onerror = () => rej(new Error('No pudimos leer el archivo.'));
   r.readAsDataURL(blob);
 });
 
@@ -873,7 +937,7 @@ async function fileToPart(f) {
   }
   if (!f.type.startsWith('image/')) throw new Error(`${f.name}: usa un PDF o fotos (JPG o PNG).`);
   let bmp;
-  try { bmp = await createImageBitmap(f); } catch { throw new Error(`No pude abrir ${f.name}. Prueba con una foto JPG o PNG.`); }
+  try { bmp = await createImageBitmap(f); } catch { throw new Error(`No pudimos abrir ${f.name}. Prueba con una foto JPG o PNG.`); }
   const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas');
   c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
@@ -903,7 +967,7 @@ async function runImport(files) {
   openModal(`<p class="eyebrow">Importando</p><h2>Leyendo tu rutina…</h2><p class="muted">Puede tardar hasta un minuto. No cierres la app.</p><div class="spinner" aria-hidden="true"></div>`, false);
   try {
     const res = await cloud.importRoutine({ files: await Promise.all(files.map(fileToPart)) });
-    if (!res?.ok) throw new Error(res?.problem || 'No pude leer la rutina.');
+    if (!res?.ok) throw new Error(res?.problem || 'No pudimos leer la rutina.');
     draft = draftFromImport(res);
     keepDraft();
     closeModal();
@@ -977,7 +1041,11 @@ const MODE_HELP = {
 };
 
 function newDraft() {
-  const n = Math.max(1, Math.min(6, Number(db().profile?.days) || 3));
+  // Una rutina a medio armar no se pisa sin preguntar (el borrador vive en el celular hasta guardarla).
+  let d = draft;
+  if (!d) { try { d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch {} }
+  if (d?._new && Array.isArray(d.days) && d.days.some((x) => x.exercises?.length) && confirm('Tienes una rutina sin guardar. ¿Seguir con ella? (Cancelar = empezar una nueva)')) { draft = d; return go('editar'); }
+  const n =Math.max(1, Math.min(6, Number(db().profile?.days) || 3));
   draft = { id: uid(), name: 'Mi rutina', source: 'propia', createdAt: new Date().toISOString(), rationale: '', nextDay: 0, days: Array.from({ length: n }, (_, k) => ({ id: uid(), name: `Día ${k + 1}`, focus: '', exercises: [] })), _new: true };
   withProgram(draft, 'doble');
   go('editar');
@@ -1037,14 +1105,17 @@ function viewProgreso() {
   const plan = activePlan();
   const status = plan ? exerciseStatus(plan, s.sessions) : [];
   const planExs = plan ? uniqueExercises(plan) : [];
+  // "Previsto vs real" solo aplica a planes con una curva prevista (12 semanas). En progresión doble no hay
+  // previsión: la gráfica proyectaba un año de subidas compuestas y marcaba "por debajo" a quien iba bien.
+  const tracked = !!plan && plan.program?.repMode !== 'doble';
   if (!planExs.some((e) => e.name === planExercise)) planExercise = (status.find((x) => x.n > 0) || status[0])?.ex.name || '';
-  const ST = { arriba: ['Por delante', 'good'], linea: ['En línea', 'ok'], abajo: ['Por debajo', 'warn'], sin: ['Sin datos', 'muted'] };
+  const ST = { arriba: ['Por delante', 'good'], linea: ['Al día', 'ok'], abajo: ['Por debajo', 'warn'], sin: ['Sin datos', 'muted'] };
   const pct = (r) => (r == null ? '—' : `${r >= 1 ? '+' : ''}${n1((r - 1) * 100)} %`);
 
   main.innerHTML = `
   <header class="top"><h1>Progreso</h1></header>
 
-  ${plan ? `
+  ${tracked ? `
   <section class="card">
     <div class="exhead"><h3>Previsto vs real</h3><span class="pill">Semana ${weekInfo(plan, currentWeek(plan)).week}${plan.program?.repMode === 'doble' ? '' : ` de ${WEEKS}`}</span></div>
     <p class="muted small">Línea punteada: hacia dónde deberías ir. Línea continua: tu fuerza real, es decir, el peso que podrías levantar 1 vez, calculado con tus series.</p>
@@ -1054,7 +1125,7 @@ function viewProgreso() {
       <thead><tr><th>Ejercicio</th><th>vs previsto</th><th>Estado</th></tr></thead>
       <tbody>${status.map((x) => `<tr data-act="pickPlanEx" data-name="${esc(x.ex.name)}" class="${x.ex.name === planExercise ? 'sel' : ''}"><td>${esc(x.ex.name)}</td><td class="num">${pct(x.ratio)}</td><td><span class="chip ${ST[x.status][1]}">${ST[x.status][0]}</span></td></tr>`).join('')}</tbody>
     </table>
-    <p class="muted small">"Por delante" o "por debajo" = más de un 3 % de diferencia en la última sesión. Con 2 sesiones seguidas, la app te propone un ajuste en Rutinas.</p>
+    <p class="muted small">"Por delante" o "por debajo" = más de un 3 % de diferencia en el último entreno. Con 2 entrenos seguidos, la app te propone un ajuste en la pestaña Rutina.</p>
   </section>` : ''}
 
   <section class="card">
@@ -1086,7 +1157,7 @@ function viewProgreso() {
     </details>`).join('') : '<p class="empty">Aún no hay entrenos.</p>'}
   </section>`;
 
-  if (plan && planExercise) {
+  if (tracked && planExercise) {
     renderPlanChart(plan);
     $('#psel').addEventListener('change', (e) => { planExercise = e.target.value; viewProgreso(); });
   }
@@ -1199,6 +1270,7 @@ function viewPerfil() {
   <p class="muted small center"><a href="privacidad.html">Política de privacidad</a></p>
   <p class="muted small center">${APP_NAME} v0.24${cloud.mockMode ? ' · versión de prueba' : ''}</p>`;
 
+  bindUnitMarks($('#pform'));
   $('#pform').addEventListener('change', (e) => {
     if (e.target.name !== 'prio') return;
     if (e.target.form.querySelectorAll('input[name=prio]:checked').length > 2) { e.target.checked = false; toast('Elige máximo 2 prioridades'); }
@@ -1206,11 +1278,12 @@ function viewPerfil() {
   $('#pform').addEventListener('submit', (e) => {
     e.preventDefault();
     const p = readProfile(e.target);
+    if (!validWeight(p.weight)) { toast('Escribe tu peso en kg, p. ej. 78,5'); e.target.elements.weight?.focus(); return; }
     const before = db().profile;
     const keys = ['goal', 'level', 'days', 'time', 'sex'];
     const changed = keys.some((k) => String(before[k]) !== String(p[k])) || (before.priorities || []).join() !== p.priorities.join();
     update((st) => { st.profile = { ...st.profile, ...p }; });
-    if (changed && confirm('Cambiaste datos que afectan tu plan. ¿Crear un plan nuevo con estos cambios? (Tu historial se conserva.)')) {
+    if (changed && confirm('Cambiaste datos que afectan tu rutina. ¿Crear una rutina nueva con estos cambios? (Tu historial se conserva.)')) {
       const prev = activePlan();
       const plan = withProgram(generatePlan(db().profile));
       update((st) => {
@@ -1239,11 +1312,14 @@ function viewPerfil() {
   });
   $('#imp').addEventListener('change', async (e) => {
     const f = e.target.files[0];
+    e.target.value = ''; // permite volver a elegir el mismo archivo
     if (!f) return;
     const text = await f.text();
     try { parseBackup(text); } catch (err) { alert('No se pudo importar: ' + err.message); return; }
     if (!confirm(cloud.user ? 'Se cargarán los datos del respaldo y se juntarán con los de tu cuenta. ¿Continuar?' : 'Los datos del respaldo reemplazarán los de este celular. ¿Continuar?')) return;
-    try { importJSON(text); toast('Respaldo importado'); render(); } catch (err) { alert('No se pudo importar: ' + err.message); }
+    // Con cuenta se JUNTAN (como dice el aviso): antes el respaldo reemplazaba todo y la sincronización
+    // borraba de la nube los entrenos posteriores al respaldo.
+    try { importJSON(text, !!cloud.user); toast('Respaldo importado'); render(); } catch (err) { alert('No se pudo importar: ' + err.message); }
   });
   if (acc) cloud.usage().then((u) => {
     const el = $('#usage');
@@ -1258,17 +1334,33 @@ function viewPerfil() {
 // ---------- Acciones ----------
 Object.assign(actions, {
   start: (el) => {
-    if (db().activeSession && !confirm('Ya tienes un entreno en curso. ¿Reemplazarlo?')) return go('entreno');
+    if (db().activeSession && !confirm('Ya tienes un entreno en curso. Si empiezas otro, se pierde lo que llevas. ¿Empezar uno nuevo?')) return go('entreno');
     startSession(el.dataset.day);
   },
   skipDay: () => go('entreno'),
   toggleSet: (el) => {
     const i = +el.dataset.ex, j = +el.dataset.set;
-    let rest = 0, ctx = {};
+    let rest = 0, ctx = {}, nowDone = false, allDone = false;
+    {
+      // Sin reps escritas y sin un objetivo fijo (entreno libre, ejercicio agregado): no se inventa el tope del rango,
+      // que quedaba guardado como hecho y disparaba subidas de peso y récords falsos.
+      const e = db().activeSession.exercises[i], set = e.sets[j];
+      if (!set.done && !set.warm && set.reps === '' && e.target.reps == null) {
+        toast('Escribe las reps que hiciste');
+        document.querySelector(`input[data-bind="reps"][data-ex="${i}"][data-set="${j}"]`)?.focus();
+        return;
+      }
+    }
+    if (db().settings.restSound) audioCtx();
     update((st) => {
+      const a = st.activeSession;
+      // Entreno abierto otro día y nunca empezado: cuenta desde hoy, no desde el día en que se abrió.
+      if (a.date !== today() && !a.exercises.some((x) => x.sets.some((z) => z.done))) { a.date = today(); a.startedAt = Date.now(); }
       const e = st.activeSession.exercises[i];
       const set = e.sets[j];
       set.done = !set.done;
+      nowDone = set.done;
+      if (set.done) a.lastSetAt = Date.now();
       if (set.done && set.warm) {
         // Calentamiento: no cuenta para el progreso ni arranca el descanso largo.
         if (set.reps === '') set.reps = 8;
@@ -1284,10 +1376,18 @@ Object.assign(actions, {
         const nextSet = e.sets.findIndex((x, k) => k > j && !x.done);
         const nextEx = st.activeSession.exercises.slice(i + 1).find((x) => x.sets.some((z) => !z.done));
         ctx = { ex: e.name, next: nextSet >= 0 ? `Sigue: serie ${nextSet + 1} de ${e.sets.length}` : nextEx ? `Sigue: ${nextEx.name}` : 'Última serie del entreno' };
+        // Era la última serie del entreno: no hay nada que descansar.
+        allDone = st.activeSession.exercises.every((x) => x.sets.every((z) => z.done || z.warm));
+        if (allDone) rest = 0;
       }
     });
     if (rest) startRest(rest, ctx);
+    else if (allDone || (!nowDone && restTimer?.ex === db().activeSession.exercises[i].name)) stopRest(); // desmarcar una serie cancela su descanso
     viewEntreno();
+    if (allDone) {
+      toast('¡Última serie hecha! Ya puedes terminar el entreno.');
+      document.querySelector('[data-act="finish"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
   },
   addSet: (el) => { update((st) => { const e = st.activeSession.exercises[+el.dataset.ex]; const l = [...e.sets].reverse().find((x) => !x.warm); e.sets.push({ kg: l?.kg ?? '', reps: '', rir: '', done: false }); }); viewEntreno(); },
   // Serie de calentamiento antes de las de trabajo (≈ mitad del peso). No se guarda en el historial.
@@ -1303,9 +1403,12 @@ Object.assign(actions, {
   },
   delSet: (el) => {
     const e0 = db().activeSession.exercises[+el.dataset.ex];
-    if (e0.sets.filter((x) => !x.warm).length <= 1 && !e0.sets[e0.sets.length - 1]?.warm) return;
-    if (e0.sets[e0.sets.length - 1]?.done && !confirm('La última serie ya está marcada como hecha. ¿Quitarla igual?')) return;
-    update((st) => { const e = st.activeSession.exercises[+el.dataset.ex]; if (e.sets.length > 1) e.sets.pop(); }); viewEntreno();
+    // Se quita la última serie de trabajo; si solo queda una, la última de calentamiento (antes el botón no hacía nada).
+    const work = e0.sets.filter((x) => !x.warm).length;
+    const k = work > 1 ? e0.sets.length - 1 : e0.sets.map((x) => !!x.warm).lastIndexOf(true);
+    if (k < 0) return toast('Un ejercicio necesita al menos una serie. Para quitarlo, usa ✕.');
+    if (e0.sets[k].done && !confirm('Esa serie ya está marcada como hecha. ¿Quitarla igual?')) return;
+    update((st) => { st.activeSession.exercises[+el.dataset.ex].sets.splice(k, 1); }); viewEntreno();
   },
   backToStart: () => viewStart(),
   installApp: async () => { if (!installEvt) return; installEvt.prompt(); try { await installEvt.userChoice; } catch {} installEvt = null; update((st) => (st.settings.installTipDone = true)); render(); },
@@ -1367,14 +1470,14 @@ Object.assign(actions, {
   tourEnd: () => { update((st) => (st.settings.tourDone = true)); closeModal(); },
   tour: () => openTour(0),
   tipsDone: () => { update((st) => (st.settings.workoutTipsDone = true)); render(); },
-  restAdd: () => { if (restTimer) { restTimer.end += 30000; restTimer.total += 30; renderRestBar(); cloud.scheduleRestPush(restTimer.end, restTimer.next); } },
+  restAdd: () => { if (restTimer) { restTimer.end += 30000; restTimer.total += 30; keepRest(); renderRestBar(); cloud.scheduleRestPush(restTimer.end, restTimer.next); } },
   restStop: () => stopRest(),
 
   feedback: () => {
     openModal(`<h2>Cuéntanos</h2>
       <p class="muted small">¿Algo no funciona, te confundió o se te ocurre una idea? Lo lee directamente quien hace la app.</p>
       <textarea id="fbmsg" rows="5" maxlength="2000" placeholder="Ej.: no encontré cómo cambiar un ejercicio en mi rutina"></textarea>
-      <p class="formerr" id="fberr" hidden></p>
+      <p class="formerr" id="fberr" role="alert" hidden></p>
       <button class="btn primary big" data-act="sendFeedback">Enviar</button>`);
     setTimeout(() => $('#fbmsg')?.focus(), 50);
   },
@@ -1397,21 +1500,22 @@ Object.assign(actions, {
     inp.addEventListener('change', () => runImport([...inp.files]));
     inp.click();
   },
-  startScience: () => go('dividir'),
+  startScience: () => { splitN = null; go('dividir'); },
   editActive: () => { update((st) => (st.coach.newPlanTip = false)); draft = clone(activePlan()); go('editar'); },
   exSets: (el) => { const e = draft.days[+el.dataset.day].exercises[+el.dataset.ex]; e.sets = Math.max(1, Math.min(8, (Number(e.sets) || 3) + Number(el.dataset.d))); const y = scrollY; viewEditar(); window.scrollTo(0, y); },
   applyFix: (el) => {
     const item = reviewRoutine(draft, db().profile)[+el.dataset.i];
     if (!item?.fix) return;
-    applyFix(draft, item.fix, db().profile);
-    toast('Listo: ' + item.fix.label.toLowerCase());
+    // Si no había nada que cambiar se dice, en vez de un "Listo" que no hizo nada.
+    toast(applyFix(draft, item.fix, db().profile) ? 'Listo: ' + item.fix.label.toLowerCase() : 'No hay más que ajustar ahí: quita o cambia un ejercicio.');
     const y = scrollY; viewEditar(); window.scrollTo(0, y);
   },
   tipDone: (el) => { update((st) => (st.coach.newPlanTip = false)); if (el.tagName !== 'A') render(); },
   choiceScience: () => { generateSciencePlan(); go('hoy'); },
-  genScience: () => go('dividir'),
-  splitDays: (el) => { update((st) => (st.profile.days = Number(el.dataset.n))); viewSplit(); },
+  genScience: () => { splitN = null; go('dividir'); },
+  splitDays: (el) => { splitN = Number(el.dataset.n); viewSplit(); },
   chooseSplit: (el) => {
+    if (splitN) { update((st) => (st.profile.days = splitN)); splitN = null; }
     const plan = withProgram(generatePlan(db().profile, el.dataset.key));
     const first = !activePlan();
     update((st) => { st.plans.push(plan); if (first) { st.activePlanId = plan.id; st.coach.newPlanTip = true; } });
@@ -1433,7 +1537,8 @@ Object.assign(actions, {
     });
     const p = activePlan();
     sharePlan(p);
-    closeModal(); toast('Rutina activada: empieza la semana 1'); go('rutinas');
+    const used = db().sessions.some((x) => x.planId === p.id);
+    closeModal(); toast(used ? 'Rutina activada' : 'Rutina activada: empieza la semana 1'); go('rutinas');
   },
   edit: (el) => { draft = clone(db().plans.find((p) => p.id === el.dataset.plan)); closeModal(); go('editar'); },
   duplicate: (el) => { const p = clone(db().plans.find((x) => x.id === el.dataset.plan)); p.id = uid(); p.name += ' (copia)'; p.source = 'propia'; p.reviews = []; p.days.forEach((d) => (d.id = uid())); withProgram(p, p.program?.repMode); update((st) => st.plans.push(p)); closeModal(); toast('Rutina duplicada'); render(); },
@@ -1455,7 +1560,7 @@ Object.assign(actions, {
     render();
   },
   deletePlan: (el) => {
-    if (!confirm('¿Eliminar este plan? Tu historial de entrenos se conserva.')) return;
+    if (!confirm('¿Eliminar esta rutina? Tu historial de entrenos se conserva.')) return;
     update((st) => { st.plans = st.plans.filter((p) => p.id !== el.dataset.plan); if (st.activePlanId === el.dataset.plan) st.activePlanId = st.plans[0]?.id || null; });
     closeModal(); render();
   },
@@ -1470,6 +1575,11 @@ Object.assign(actions, {
     if (!draft.days.length) return alert('Agrega al menos un día.');
     if (draft.days.some((d) => !d.exercises.length)) return alert('Cada día necesita al menos un ejercicio (o bórralo).');
     const isNew = draft._new; delete draft._new; delete draft._imported;
+    // La semana 1 empieza al guardar, no cuando se abrió el borrador (que puede llevar días guardado).
+    // Y si cambió la forma de progresar de una rutina ya usada, el plan nuevo arranca hoy: con la fecha vieja,
+    // una rutina de más de 12 semanas quedaba "terminada" y en descarga permanente.
+    const old = db().plans.find((p) => p.id === draft.id);
+    if (isNew || (old?.program && old.program.repMode !== draft.program.repMode && (old.program.repMode === 'doble' || currentWeek(old) > WEEKS))) { draft.program.startDate = today(); if (!isNew) draft.program.adjust = {}; }
     draft.days.forEach((d) => { d.focus = [...new Set(d.exercises.map((e) => MUSCLES[e.muscle]))].slice(0, 4).join(', '); d.exercises.forEach((e) => { if (Number(e.repMin) > Number(e.repMax)) [e.repMin, e.repMax] = [e.repMax, e.repMin]; }); });
     const saved = draft;
     update((st) => { const i = st.plans.findIndex((p) => p.id === saved.id); if (i >= 0) st.plans[i] = saved; else st.plans.push(saved); if (isNew || !st.activePlanId) st.activePlanId = saved.id; st.coach.newPlanTip = false; });
@@ -1504,14 +1614,16 @@ Las series que ya marcaste se conservan.`)) {
     const blob = new Blob([exportJSON()], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `forja-respaldo-${today()}.json`;
+    a.download = `lift-respaldo-${today()}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   },
-  reset: () => {
+  reset: async () => {
+    if (cloud.user && (cloud.isOffline() || !navigator.onLine)) return toast('Necesitas conexión para borrar los datos de tu cuenta.');
     if (!(confirm(`Esto borra TODOS tus datos de entrenamiento${cloud.user ? ' de este celular y de tu cuenta' : ' de este celular'}. ¿Seguro?`) && confirm('Última confirmación: ¿borrar todo?'))) return;
+    // Primero lo publicado en el feed de tus amigos y la rutina compartida: si falla, no se borra nada a medias.
+    try { await cloud.clearActivity(); } catch (e) { console.warn(e); return toast('No pudimos borrar lo que compartiste con tus amigos. Revisa la conexión e inténtalo de nuevo.'); }
     resetAll(!!cloud.user); draft = null; try { localStorage.removeItem(DRAFT_KEY); } catch {}
-    cloud.clearActivity(); // también lo publicado en el feed de tus amigos
     location.hash = ''; render();
   },
   demoReset: async () => {
@@ -1523,9 +1635,11 @@ Las series que ya marcaste se conservan.`)) {
   logout: async () => {
     if (db().activeSession && !confirm('Tienes un entreno en curso. ¿Cerrar sesión igual?')) return;
     // Antes de borrar los datos del celular, que todo esté en la nube.
-    if (cloud.hasUnsynced()) {
+    // (También cuenta lo pendiente de publicar a los amigos.)
+    const pending = () => cloud.hasUnsynced() || db().outbox.length > 0;
+    if (pending()) {
       await cloud.flush();
-      if (cloud.hasUnsynced() && !confirm('Hay cambios que todavía no se han subido a tu cuenta (¿estás sin conexión?). Si cierras sesión ahora, se pierden. ¿Cerrar sesión igual?')) return;
+      if (pending() && !confirm('Hay cambios que todavía no se han subido a tu cuenta (¿estás sin conexión?). Si cierras sesión ahora, se pierden. ¿Cerrar sesión igual?')) return;
     }
     await cloud.signOut();
     resetAll(false);
@@ -1571,7 +1685,13 @@ document.addEventListener('change', (e) => {
     }
   } else if (el.dataset.draft && draft) {
     const [scope, field] = el.dataset.draft.split('.');
-    const val = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+    let val = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+    if (el.type === 'number') {
+      // Un campo vacío no es un 0: RIR 0 mandaba todas las series al fallo y descanso 0 apagaba el cronómetro.
+      const min = field === 'rir' ? 0 : field === 'restSec' ? 15 : 1;
+      if (el.value === '' || !(val >= min)) { toast(field === 'restSec' ? 'El descanso mínimo es 15 s' : 'Escribe un número válido'); const y = scrollY; viewEditar(); window.scrollTo(0, y); return; }
+      if (field !== 'rir') val = Math.round(val);
+    }
     if (scope === 'name') draft.name = el.value;
     else if (scope === 'mode') draft.program = { ...newProgram(db().profile, draft.program.startDate, el.value), adjust: draft.program.adjust || {} };
     else if (scope === 'day') draft.days[+el.dataset.day][field] = val;
@@ -1583,32 +1703,67 @@ document.addEventListener('change', (e) => {
 
 // ---------- Arranque ----------
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  // Al volver a la app se pregunta si hay versión nueva; cuando la nueva toma el control se recarga
+  // (menos en pleno entreno o escribiendo, para no interrumpir).
+  let controlled = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('./sw.js').then((reg) => {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch((e) => console.warn('Service worker', e));
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!controlled) { controlled = true; return; } // primera instalación: no hay nada viejo que cambiar
+    const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
+    if (db().activeSession || draft || typing || modalOpen()) { toast('Hay una versión nueva de Lift: se aplica la próxima vez que abras la app.'); return; }
+    location.reload();
+  });
 }
 
-async function afterLogin() {
-  await cloud.syncOnLogin({
-    askAdoptLocal: async () => confirm('Este celular tiene entrenos guardados sin cuenta. ¿Quieres pasarlos a tu cuenta? Se juntan con lo que ya tienes en la nube. (Si cancelas, se usan solo los datos de la nube.)'),
-  });
-  await consumeInvite();
+// Una sola a la vez: al abrir la app, la librería de cuentas avisa "sesión iniciada" mientras el arranque
+// también sincroniza; dos sincronizaciones a la par duplicaban publicaciones y podían pisar datos locales.
+let loginRun = null;
+function afterLogin() {
+  return (loginRun ||= (async () => {
+    try {
+      await cloud.syncOnLogin({
+        askAdoptLocal: async () => confirm('Este celular tiene entrenos guardados sin cuenta. ¿Quieres pasarlos a tu cuenta? Se juntan con lo que ya tienes en la nube. (Si cancelas, se usan solo los datos de la nube.)'),
+      });
+      await consumeInvite();
+    } finally { loginRun = null; }
+  })());
 }
+// ¿La persona está en medio de algo que un repintado le borraría?
+const busy = () => /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '') || modalOpen();
 
 cloud.onAuthChange(async (u, reason) => {
   if (u && reason !== 'pulled') { try { await afterLogin(); } catch (e) { console.error(e); toast('No se pudo sincronizar. Seguiremos intentando.'); } }
+  if (!booted) return;
+  // Llegaron datos de otro aparato mientras escribes o entrenas: no se repinta encima (se verá al cambiar de pantalla).
+  if (reason === 'pulled' && (busy() || location.hash === '#entreno')) return;
+  const y = scrollY;
   render();
+  if (reason === 'pulled') window.scrollTo(0, y);
 });
 
 (async function boot() {
   main.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const start = (async () => { const u = await cloud.init(); if (u && !u.offline) await afterLogin(); return u; })();
+  // Con señal débil (conectado pero sin datos) no se espera a la nube: si este celular ya tiene la cuenta
+  // y sus datos, a los 3 s se entra con ellos y la sincronización termina en segundo plano.
+  const local = !!(db().owner && db().profile);
+  const SLOW = Symbol('lento');
   try {
-    const u = await cloud.init();
-    if (u && !u.offline) await afterLogin();
-    else if (u?.offline) toast('Sin conexión: tus cambios se guardan en este celular y se suben al volver la señal.');
+    const u = await (local ? Promise.race([start, new Promise((ok) => setTimeout(() => ok(SLOW), 3000))]) : start);
+    if (u === SLOW && cloud.startOffline()) {
+      start.then(() => { if (!busy() && location.hash !== '#entreno') { const y = scrollY; render(); window.scrollTo(0, y); } })
+        .catch((e) => console.warn('Sincronización pendiente', e));
+    } else if (u === SLOW) {
+      await start;
+    } else if (u?.offline) toast('Sin conexión: tus cambios se guardan en este celular y se suben al volver la señal.');
   } catch (e) {
     console.error(e);
     toast('Sin conexión con la nube: usando los datos de este celular.');
   }
   booted = true;
+  restoreRest();
   render();
 })();
 

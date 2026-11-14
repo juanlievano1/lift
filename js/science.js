@@ -283,8 +283,10 @@ export function generatePlan(profile, splitKey) {
       const item = { name: ex.name, muscle: ex.muscle, sec: ex.sec, kind: ex.kind, ...scheme(profile.goal, profile.level, ex.kind), notes: '' };
       const cost = item.sets * minPerSet(item);
       // Lo que no cabe en el tiempo se queda por fuera, salvo los músculos que elegiste priorizar.
-      if (minutes + cost > maxMin && !prio.has(ex.muscle)) {
-        const key = KEY_SLOTS.has(pattern) && !covered.has(pattern);
+      // Los músculos priorizados entran con 2 series si aún caben; si ni así, también se quedan por fuera
+      // (antes entraban siempre y un día de "30–45 min" podía salir de 84).
+      if (minutes + cost > maxMin) {
+        const key = (KEY_SLOTS.has(pattern) && !covered.has(pattern)) || prio.has(ex.muscle);
         if (key && minutes + 2 * minPerSet(item) <= maxMin + 8) item.sets = 2;
         else { left.push(`${ex.name} (${tpl.name})`); continue; }
       }
@@ -311,7 +313,10 @@ export function generatePlan(profile, splitKey) {
   for (const d of plan.days) {
     let guard = 30;
     while (estimateMinutes(d) > maxMin + 2 && guard--) {
-      const cand = d.exercises.filter((e) => e.sets > 2 && !prio.has(e.muscle)).sort((a, b) => (a.kind === b.kind ? b.sets - a.sets : a.kind === 'i' ? -1 : 1))[0];
+      // Primero lo que no es prioridad; si el día sigue muy pasado de tiempo (+8 min), también las prioridades.
+      const order = (a, b) => (a.kind === b.kind ? b.sets - a.sets : a.kind === 'i' ? -1 : 1);
+      const cand = d.exercises.filter((e) => e.sets > 2 && !prio.has(e.muscle)).sort(order)[0]
+        || (estimateMinutes(d) > maxMin + 8 ? d.exercises.filter((e) => e.sets > 2).sort(order)[0] : null);
       if (!cand) break;
       cand.sets -= 1;
     }
@@ -503,7 +508,13 @@ export function suggestion(sessions, target, name, unit = 'kg') {
   const atTop = done.filter((s) => Number(s.kg) === topKg);
   const allMax = atTop.length >= target.sets && atTop.every((s) => Number(s.reps) >= target.repMax);
   const ex = exerciseByName(name);
-  const incKg = ex && ex.kind === 'c' && ex.equip === 'barra' ? 2.5 : ex && ex.equip === 'peso_corporal' ? 0 : ex?.kind === 'c' ? 2 : 1;
+  // Mismos saltos que la progresión de las rutinas: 2,5 kg (5 en pierna compuesta), 2 kg en mancuernas,
+  // y sin salto en peso corporal o barra fija (antes dominadas "subía" de 0 a 2 kg y la prensa de 100 a 102).
+  const eq = ex?.equip;
+  const incKg = eq === 'peso_corporal' || eq === 'barra_fija' ? 0
+    : eq === 'mancuernas' ? 2
+    : eq ? 2.5 * (ex.kind === 'c' && ['cuadriceps', 'isquios', 'gluteos'].includes(ex.muscle) && eq !== 'polea' ? 2 : 1)
+    : 1;
   const inc = incKg && unit === 'lb' ? 5 * LB : incKg;
   if (allMax) {
     if (!inc) return { kg: topKg, text: `Completaste el rango. Hazlo más difícil (más lento, pausa o lastre) y vuelve a ${target.repMin} reps.` };

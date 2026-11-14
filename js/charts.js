@@ -60,7 +60,7 @@ export function lineChart(el, { series, unit = '', decimals = 1 }) {
     }).filter(Boolean);
     hl.innerHTML = rows.map((r0) => `<circle class="hdot ${series[r0.i].kind}" cx="${x}" cy="${sy(r0.y)}" r="5"/>`).join('');
     tip.hidden = false;
-    tip.innerHTML = `<b>${fmtDate(best)}</b>${rows.map((r0) => `<div><i class="key s${r0.i} ${series[r0.i].kind}"></i>${r0.name}: <b>${r0.y.toFixed(decimals)} ${unit}</b></div>`).join('')}`;
+    tip.innerHTML = `<b>${fmtDate(best)}</b>${rows.map((r0) => `<div><i class="key s${r0.i} ${series[r0.i].kind}"></i>${r0.name}: <b>${r0.y.toLocaleString('es', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })} ${unit}</b></div>`).join('')}`;
     const left = (x / W) * r.width;
     tip.style.left = Math.min(Math.max(left - 70, 0), r.width - 150) + 'px';
   };

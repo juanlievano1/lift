@@ -1,6 +1,6 @@
 // Service worker: deja la app disponible sin internet.
 // Sube VERSION cada vez que cambies archivos para que el celular descargue la versión nueva.
-const VERSION = 'lift-v38';
+const VERSION = 'lift-v39';
 const SHELL = [
   './', './index.html', './styles.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/util.js', './js/science.js', './js/program.js', './js/charts.js',
@@ -22,20 +22,28 @@ self.addEventListener('install', (e) => {
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== VERSION && k !== CDN).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => /^(lift|forja)-/.test(k) && k !== VERSION && k !== CDN).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.hostname === 'api.anthropic.com') return; // la IA siempre va por red
-  // Archivos de la app: red primero (para recibir cambios), caché si no hay conexión.
+  // Archivos de la app: red primero (para recibir cambios), caché si no hay conexión...
+  // ...o si la red tarda más de 3 s (señal débil del gimnasio) o el servidor responde con error.
   if (url.origin === location.origin) {
-    e.respondWith(
-      // no-cache: siempre se pregunta al servidor (respuesta 304 barata) para no mezclar versiones.
-      fetch(e.request.mode === 'navigate' ? e.request : new Request(e.request, { cache: 'no-cache' }))
-        .then((res) => { if (res.ok) { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(e.request, copy)); } return res; })
-        .catch(() => caches.match(e.request, { ignoreSearch: true }).then((r) => r || caches.match('./index.html')))
-    );
+    const nav = e.request.mode === 'navigate';
+    const key = url.origin + url.pathname; // sin ?i=… ni ?invite=…: una sola copia por archivo
+    const cached = () => caches.match(key).then((r) => r || (nav ? caches.match('./index.html') : undefined));
+    // no-cache: siempre se pregunta al servidor (respuesta 304 barata) para no mezclar versiones.
+    const net = fetch(nav ? e.request : new Request(e.request, { cache: 'no-cache' })).then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const copy = res.clone();
+      e.waitUntil(caches.open(VERSION).then((c) => c.put(key, copy)).catch(() => {}));
+      return res;
+    });
+    net.catch(() => {}); // si gana la caché, el fallo tardío de la red no es un error
+    const slow = new Promise((ok) => setTimeout(ok, 3000)).then(cached).then((r) => r || net);
+    e.respondWith(Promise.race([net, slow]).catch(() => cached().then((r) => r || Response.error())));
     return;
   }
   // Librerías del CDN y tipografías: caché primero (versiones fijas).

@@ -55,11 +55,18 @@ export const isDouble = (plan) => plan?.program?.repMode === 'doble';
 
 // Asegura que cualquier rutina (incluidas las antiguas o las propias) tenga un plan de 12 semanas.
 export function ensureProgram(plan, profile) {
-  if (!plan.program) plan.program = newProgram(profile, (plan.createdAt || new Date().toISOString()).slice(0, 10), plan.source === 'propia' ? 'fijo' : 'fases');
+  if (!plan.program) {
+    // Fecha LOCAL de creación (la UTC caía al día siguiente por la noche y dejaba fuera el entreno de ese día).
+    const d = new Date(plan.createdAt || Date.now());
+    const iso = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    plan.program = newProgram(profile, iso, plan.source === 'propia' ? 'fijo' : 'fases');
+  }
   return plan.program;
 }
 
-const isoToMs = (iso) => +new Date(iso + 'T12:00:00');
+// Días de calendario puros (UTC): con hora local, la semana del cambio de horario dura 1 h menos
+// y el primer día de cada semana quedaba con las cargas de la semana anterior.
+const isoToMs = (iso) => Date.parse(iso + 'T12:00:00Z');
 export const weekOf = (plan, dateIso) => Math.floor((isoToMs(dateIso) - isoToMs(plan.program.startDate)) / (7 * DAY)) + 1;
 export const weekDate = (plan, w) => new Date(isoToMs(plan.program.startDate) + ((w - 1) * 7 + 3) * DAY).toISOString().slice(0, 10);
 
@@ -96,7 +103,9 @@ const isBodyweight = (ex) => ['peso_corporal', 'barra_fija'].includes(exerciseBy
 export function setMetric(set, bw) {
   const reps = Number(set.reps) || 0;
   const rir = Number(set.rir) || 0;
-  if (bw) return reps + rir;
+  if (reps <= 0) return 0; // una serie fallida (0 reps) no es rendimiento, aunque tenga RIR anotado
+  // Peso corporal con lastre: el lastre cuenta (antes, seguir el consejo de "añade lastre" marcaba "por debajo").
+  if (bw) return (reps + rir) * (1 + (Number(set.kg) || 0) / 75);
   return e1rm(Number(set.kg) || 0, reps + rir);
 }
 
@@ -181,7 +190,10 @@ export function prescribe(plan, sessions, ex, w, profile = null) {
   const info = weekInfo(plan, w);
   const kind = ex.kind || exerciseByName(ex.name)?.kind || 'c';
   const lvl = plan.program.level;
-  let [repMin, repMax] = plan.program.repMode === 'fijo' ? [ex.repMin, ex.repMax] : (BLOCKS[plan.program.goal] || BLOCKS.hipertrofia)[info.block - 1][kind];
+  // Rango fijo: si falta o quedó en 0, se usa el habitual (antes salía "× 0 reps" o "× NaN reps").
+  const fMin = Number(ex.repMin) || (kind === 'c' ? 6 : 10);
+  const fMax = Math.max(Number(ex.repMax) || (kind === 'c' ? 10 : 15), fMin);
+  let [repMin, repMax] = plan.program.repMode === 'fijo' ? [fMin, fMax] :(BLOCKS[plan.program.goal] || BLOCKS.hipertrofia)[info.block - 1][kind];
   // Muy pocas reps (bloques de fuerza) solo en los básicos: en zancadas, máquinas o poleas aportan poco y arriesgan más.
   if (plan.program.repMode !== 'fijo' && kind === 'c' && repMin < 6 && !BASICS.has(exerciseByName(ex.name)?.id)) [repMin, repMax] = [6, 8];
   let rir, sets = Number(ex.sets) || 3;
@@ -290,11 +302,16 @@ export function prescribeDouble(plan, sessions, ex, profile = null) {
   if (completed) {
     // Si además te sobraron muchas reps en reserva, el salto es doble.
     const jump = loadStep(ex, unit) * (avgRir >= rir + 2 ? 2 : 1);
-    const kg = roundLoad(top + jump, ex, unit);
+    // Si el peso anterior no cae en los saltos habituales (p. ej. mancuernas de 5 kg con saltos de 2),
+    // redondear subía salto y medio (5 → 8). En ese caso se suma el salto exacto.
+    const onGrid = Math.abs(roundLoad(top, ex, unit) - top) < 0.01;
+    const kg = onGrid ? roundLoad(top + jump, ex, unit) : Math.round((top + jump) * 1000) / 1000;
     return { ...base, targetReps: repMin, kg, text: `¡Subes peso! Completaste ${repMax} reps en todas las series: ${numStr(inUnit(top, unit))} → ${W(kg)}${hand}. Vuelve a ${repMin} reps y sube desde ahí.` };
   }
   if (minReps < repMin - 1) {
-    const kg = roundLoad(top * 0.9, ex, unit);
+    let kg = roundLoad(top * 0.9, ex, unit);
+    // Con pesos livianos el 10 % redondea al mismo peso: se baja un salto completo si existe uno más liviano.
+    if (kg >= top) { const lower = roundLoad(top - loadStep(ex, unit), ex, unit); if (lower > 0 && lower < top) kg = lower; }
     if (kg >= top) return { ...base, targetReps: Math.max(1, minReps + 1), kg: top, text: `La vez pasada te quedaste corto (${reps.join(', ')} reps) y no se puede bajar más el peso. Mantén ${W(top)}${hand} y busca ${Math.max(1, minReps + 1)} reps; si sigue costando, cambia a una versión más liviana (⇄ Cambiar ejercicio).` };
     return { ...base, targetReps: repMin, kg, text: `La vez pasada te quedaste corto (${reps.join(', ')} reps). Baja a ${W(kg)}${hand} y busca ${repMin} reps con buena técnica.` };
   }
@@ -370,7 +387,10 @@ export function review(plan, sessions, { now, profile, weightRate }) {
   const downs = doble ? [] : tracked.filter((s) => s.streak === 'abajo');
   const fatigue = !doble && tracked.length >= 3 && tracked.filter((s) => s.status === 'abajo').length / tracked.length >= 0.5;
   const nextDeload = p.deloads.find((d) => d >= info.week);
-  if (fatigue && !info.deload && nextDeload && nextDeload - info.week >= 1) {
+  // No se vuelve a ofrecer si ya hubo una descarga en las 2 semanas anteriores (antes se podía adelantar
+  // cada semana y el plan quedaba con seis descargas seguidas).
+  const recentDeload = p.deloads.some((d) => d < info.week && d >= info.week - 2);
+  if (fatigue && !info.deload && !recentDeload && nextDeload && nextDeload - info.week >= 1) {
     recs.push({ key: 'deload', level: 'warn', title: 'Señales de fatiga acumulada', text: `La mitad o más de tus ejercicios están por debajo del plan. Lo más eficaz suele ser adelantar la descarga a esta semana (semana ${info.week}) y retomar con energía. Revisa también sueño y comida.`, action: 'deloadNow', cta: 'Adelantar descarga' });
   } else if (downs.length) {
     const hard = info.inBlock === 3;
@@ -400,7 +420,7 @@ export function review(plan, sessions, { now, profile, weightRate }) {
   if (p.repMode !== 'doble' && info.inBlock === 4 && !info.finished && tracked.length) {
     const c = { arriba: 0, linea: 0, abajo: 0 };
     tracked.forEach((s) => c[s.status] !== undefined && c[s.status]++);
-    recs.push({ key: 'bloque', level: 'info', title: `Cierre del bloque ${info.block}: ${info.blockName}`, text: `${c.arriba} por delante, ${c.linea} en línea y ${c.abajo} por debajo del plan. Esta semana descarga; la próxima empieza el bloque ${info.block + 1} con nuevos rangos de repeticiones. Buen momento para revisar el bloque con IA.`, action: 'aiReview', cta: 'Revisar con IA' });
+    recs.push({ key: 'bloque', level: 'info', title: `Cierre del bloque ${info.block}: ${info.blockName}`, text: `${c.arriba} por delante, ${c.linea} al día y ${c.abajo} por debajo del plan. ${info.deload ? 'Esta semana descarga; ' : ''}${info.block >= 3 ? 'con esta semana terminas las 12 semanas del plan' : `la próxima empieza el bloque ${info.block + 1} con nuevos rangos de repeticiones`}. Buen momento para revisar el bloque con IA.`, action: 'aiReview', cta: 'Revisar con IA' });
   }
 
   return recs.filter((r) => !p.dismissed.includes(`${r.key}@${info.week}`));

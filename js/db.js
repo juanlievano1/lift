@@ -70,6 +70,18 @@ export function update(fn) {
 }
 
 // Reemplaza todo el estado (al bajar datos de la nube o cambiar de cuenta) sin disparar subida.
+// Dos ventanas de Lift en el mismo celular (la app instalada y una pestaña del navegador) comparten el
+// almacenamiento pero cada una tenía su copia en memoria: la más vieja pisaba a la otra y, al sincronizar,
+// borraba sus entrenos de la nube. Ahora cada una adopta lo más nuevo que encuentre guardado.
+export function reloadIfNewer() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (raw && typeof raw === 'object' && (Number(raw.updatedAt) || 0) > (Number(state.updatedAt) || 0)) { state = normalize(raw); return true; }
+  } catch { /* se queda con lo que hay en memoria */ }
+  return false;
+}
+if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('storage', (e) => { if (e.key === KEY) reloadIfNewer(); });
+
 export function replaceState(data, owner) {
   state = normalize({ ...data, owner });
   persist();
@@ -104,12 +116,50 @@ export function parseBackup(text) {
   const arr = (k) => data?.[k] === undefined || Array.isArray(data[k]);
   if (!data || typeof data !== 'object' || !Array.isArray(data.sessions) || !arr('plans') || !arr('weights')) throw new Error('el archivo no es un respaldo de Lift');
   if (data.profile != null && typeof data.profile !== 'object') throw new Error('el perfil del respaldo está dañado');
-  return data;
+  return cleanBackup(data);
 }
 
-// Importa un respaldo. Conserva el entreno en curso y la cuenta; con cuenta, la nube lo mezcla con lo que ya hay.
-export function importJSON(text) {
+// Un respaldo es un archivo que puede venir de otra persona ("importa mi rutina"): los campos que la app
+// pinta como números o identificadores se fuerzan a serlo, y ningún texto conserva etiquetas HTML.
+const NUMERIC = new Set(['repMin', 'repMax', 'restSec', 'durationMin', 'reps', 'week', 'weight', 'height', 'age', 'minutes', 'nextDay', 'startedAt']);
+const IDS = new Set(['id', 'planId', 'dayId', 'activePlanId']);
+function cleanBackup(v, key = '') {
+  if (Array.isArray(v)) return v.map((x) => cleanBackup(x, key));
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const [k, x] of Object.entries(v)) {
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+      out[k.replace(/[<>]/g, '')] = k === 'exUnits' && x && typeof x === 'object'
+        ? Object.fromEntries(Object.entries(x).map(([n, u]) => [n.replace(/[<>]/g, ''), u === 'lb' ? 'lb' : 'kg']))
+        : cleanBackup(x, k);
+    }
+    return out;
+  }
+  if (typeof v !== 'string') return v;
+  if (IDS.has(key)) return v.replace(/[^\w-]/g, '').slice(0, 64);
+  if (NUMERIC.has(key) || key === 'days' || key === 'sets') return v === '' ? '' : Number(v.replace(',', '.')) || 0; // "days"/"sets" como texto (los de verdad son listas o números)
+  if (key === 'kg') return v === '' ? '' : Number(v.replace(',', '.')) || '';
+  if (key === 'rir') return v.replace(/[^0-9.,\-–]/g, '').slice(0, 8);
+  return v.replace(/[<>]/g, '');
+}
+
+// Importa un respaldo. Conserva el entreno en curso y la cuenta.
+// merge = hay cuenta: lo que ya está en el celular y no viene en el respaldo se conserva (se juntan).
+export function importJSON(text, merge = false) {
   const data = parseBackup(text);
+  if (merge) {
+    for (const c of ['sessions', 'weights', 'plans']) {
+      // Lo del celular manda; del respaldo solo entra lo que aquí no existe (no revierte rutinas editadas después).
+      const have = new Set((state[c] || []).map((x) => x?.id));
+      data[c] = [...(state[c] || []), ...(data[c] || []).filter((x) => !have.has(x?.id))];
+      if (c !== 'plans') data[c].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    }
+    // Perfil, ajustes (p. ej. qué compartes con amigos) y rutina activa: los actuales, si existen.
+    if (state.profile) data.profile = state.profile;
+    if (state.profile) { data.settings = state.settings; data.coach = state.coach; }
+    if (state.activePlanId && data.plans.some((p) => p.id === state.activePlanId)) data.activePlanId = state.activePlanId;
+    else if (!data.plans.some((p) => p.id === data.activePlanId)) data.activePlanId = data.plans[0]?.id || null;
+  }
   state = normalize({ ...data, owner: state.owner, activeSession: state.activeSession, outbox: state.outbox });
   save();
 }

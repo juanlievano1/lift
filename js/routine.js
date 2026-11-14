@@ -42,6 +42,7 @@ export function reviewRoutine(plan, profile) {
 
   const vol = weeklyVolume(plan);
   const level = profile?.level || 'intermedio';
+  const maxMin = TIME_RANGES[timeRangeOf(profile)][1];
   for (const m of Object.keys(MUSCLES)) {
     const [lo, hi] = volumeTarget(level, m);
     const small = !BIG.includes(m) && !['biceps', 'triceps'].includes(m);
@@ -59,28 +60,38 @@ export function reviewRoutine(plan, profile) {
       } else if (exs.length) {
         const need = Math.ceil(lo - vol[m]);
         const cap = level === 'principiante' ? 4 : 5;
-        const room = exs.reduce((a, e) => a + Math.max(0, cap - (Number(e.sets) || 0)), 0);
+        // Solo cuentan las series que caben en el tiempo de cada día: si no, "Sumar series" y "Recortar a tiempo"
+        // se deshacían la una a la otra sin fin.
+        const room = timeRoom(plan, m, cap, maxMin);
         // En gemelos y abdomen basta con sumar series; en los demás, si no caben, se agrega otro ejercicio.
         const ex = room < need && !small ? suggestExercise(m, plan) : null;
+        const di = ex ? bestDay(plan, m) : -1;
+        if (ex && !fitsInDay(plan.days[di], ex, profile, maxMin)) {
+          items.push({ id: `poco-${m}`, level: 'info', title: `Pocas series de ${MUSCLES[m].toLowerCase()}`, text: `${fmt(vol[m])} series a la semana; lo recomendado para tu nivel es ${lo}–${hi}. En tu tiempo por sesión (hasta ${maxMin} min) no caben más: para subirlo, cambia un ejercicio de otro músculo o amplía tu tiempo en Perfil.`, fix: room > 0 ? { type: 'addSets', muscle: m, n: Math.min(need, room), max: maxMin, label: `Sumar ${Math.min(need, room)} serie${Math.min(need, room) > 1 ? 's' : ''}` } : null });
+          continue;
+        }
         if (ex) {
-          const di = bestDay(plan, m);
           items.push({ id: `poco-${m}`, level: small ? 'info' : 'warn', title: `Pocas series de ${MUSCLES[m].toLowerCase()}`, text: `${fmt(vol[m])} series a la semana; lo recomendado para tu nivel es ${lo}–${hi}. ${exs.length === 1 ? 'Con un solo ejercicio' : 'Con los ejercicios que tienes'} no alcanza sin pasar de ${cap} series por ejercicio: mejor agrega ${ex.name} en ${plan.days[di].name}.`, fix: { type: 'addExercise', name: ex.name, day: di, label: `Agregar ${ex.name}` } });
           continue;
         }
         items.push({
           id: `poco-${m}`, level: small ? 'info' : 'warn',
           title: `Pocas series de ${MUSCLES[m].toLowerCase()}`,
-          text: `${fmt(vol[m])} series a la semana; lo recomendado para tu nivel es ${lo}–${hi}. Sumar ${need} serie${need > 1 ? 's' : ''} lo deja en rango.`,
-          fix: room > 0 ? { type: 'addSets', muscle: m, n: Math.min(need, room), label: `Sumar ${Math.min(need, room)} serie${Math.min(need, room) > 1 ? 's' : ''}` } : null,
+          text: room > 0
+            ? `${fmt(vol[m])} series a la semana; lo recomendado para tu nivel es ${lo}–${hi}. Sumar ${need} serie${need > 1 ? 's' : ''} lo deja en rango.`
+            : `${fmt(vol[m])} series a la semana; lo recomendado para tu nivel es ${lo}–${hi}. En tu tiempo por sesión (hasta ${maxMin} min) no caben más series.`,
+          fix: room > 0 ? { type: 'addSets', muscle: m, n: Math.min(need, room), max: maxMin, label: `Sumar ${Math.min(need, room)} serie${Math.min(need, room) > 1 ? 's' : ''}` } : null,
         });
       }
     } else if (vol[m] > hi + 2 && exs.length) {
-      const extra = Math.floor(vol[m] - hi);
+      // Solo se ofrece quitar lo que de verdad se puede quitar (ningún ejercicio baja de 2 series).
+      const removable = exs.reduce((a, e) => a + Math.max(0, (Number(e.sets) || 0) - 2), 0);
+      const extra = Math.min(Math.floor(vol[m] - hi), removable);
       items.push({
         id: `mucho-${m}`, level: 'info',
         title: `Muchas series de ${MUSCLES[m].toLowerCase()}`,
-        text: `${fmt(vol[m])} series a la semana, por encima de ${hi}. Más volumen no siempre da más resultado y suma fatiga.`,
-        fix: { type: 'removeSets', muscle: m, n: extra, label: `Quitar ${extra} serie${extra > 1 ? 's' : ''}` },
+        text: `${fmt(vol[m])} series a la semana, por encima de ${hi}. Más volumen no siempre da más resultado y suma fatiga.${extra > 0 ? '' : ' Tus ejercicios ya están en el mínimo de series: si quieres bajarlo, quita uno.'}`,
+        fix: extra > 0 ? { type: 'removeSets', muscle: m, n: extra, label: `Quitar ${extra} serie${extra > 1 ? 's' : ''}` } : null,
       });
     }
     // Frecuencia: los músculos grandes rinden mejor entrenados 2 veces por semana.
@@ -90,11 +101,16 @@ export function reviewRoutine(plan, profile) {
     }
   }
 
-  const maxMin = TIME_RANGES[timeRangeOf(profile)][1];
   plan.days.forEach((d, i) => {
     if (!d.exercises.length) return;
     const min = estimateMinutes(d);
-    if (min > maxMin + 2) items.push({ id: `largo-${i}`, level: 'warn', title: `${d.name} dura ≈ ${min} min`, text: `Tu tiempo por sesión es de hasta ${maxMin} min. La app puede recortar series de los aislamientos de ese día.`, fix: { type: 'trimDay', day: i, max: maxMin, label: 'Recortar a tiempo' } });
+    if (min > maxMin + 2) {
+      const canTrim = d.exercises.some((e) => (Number(e.sets) || 0) > 2);
+      items.push({ id: `largo-${i}`, level: 'warn', title: `${d.name} dura ≈ ${min} min`, text: canTrim
+        ? `Tu tiempo por sesión es de hasta ${maxMin} min. La app puede recortar series de ese día, empezando por los aislamientos.`
+        : `Tu tiempo por sesión es de hasta ${maxMin} min y todos los ejercicios ya están en 2 series: quita un ejercicio o amplía tu tiempo en Perfil.`,
+        fix: canTrim ? { type: 'trimDay', day: i, max: maxMin, label: 'Recortar a tiempo' } : null });
+    }
     // Orden: los compuestos primero, cuando estás fresco.
     const firstIso = d.exercises.findIndex((e) => kindOf(e) === 'i');
     const lastComp = d.exercises.map(kindOf).lastIndexOf('c');
@@ -113,9 +129,37 @@ export function reviewRoutine(plan, profile) {
   return items.sort((a, b) => rank[a.level] - rank[b.level]);
 }
 
-// Aplica el arreglo de una sugerencia (muta el plan).
+// Cuántas series más de un músculo caben sin pasarse del tiempo de cada día (prueba y deja todo como estaba).
+function timeRoom(plan, m, cap, maxMin) {
+  let room = 0;
+  for (const d of plan.days) {
+    const exs = d.exercises.filter((e) => e.muscle === m);
+    if (!exs.length) continue;
+    const orig = exs.map((e) => e.sets);
+    for (let guard = 0; guard < 20; guard++) {
+      const e = exs.filter((x) => (Number(x.sets) || 0) < cap).sort((a, b) => (Number(a.sets) || 0) - (Number(b.sets) || 0))[0];
+      if (!e) break;
+      e.sets = (Number(e.sets) || 0) + 1;
+      if (estimateMinutes(d) > maxMin + 2) break;
+      room++;
+    }
+    exs.forEach((e, k) => { e.sets = orig[k]; });
+  }
+  return room;
+}
+// ¿Cabe un ejercicio nuevo (con sus series por defecto) en el tiempo de ese día?
+function fitsInDay(d, lib, profile, maxMin) {
+  if (!d) return false;
+  d.exercises.push({ name: lib.name, muscle: lib.muscle, sec: lib.sec, kind: lib.kind, ...exerciseDefaults(profile, lib.kind) });
+  const ok = estimateMinutes(d) <= maxMin + 2;
+  d.exercises.pop();
+  return ok;
+}
+
+// Aplica el arreglo de una sugerencia (muta el plan). Devuelve false si no cambió nada.
 export function applyFix(plan, fix, profile) {
   const cap = profile?.level === 'principiante' ? 4 : 5;
+  plan.days.forEach((d) => d.exercises.forEach((e) => { e.sets = Number(e.sets) || 0; })); // "3" + 1 daba "31" en rutinas importadas
   if (fix.type === 'addExercise') {
     const lib = exerciseByName(fix.name);
     const d = plan.days[fix.day];
@@ -129,10 +173,13 @@ export function applyFix(plan, fix, profile) {
   }
   if (fix.type === 'addSets' || fix.type === 'removeSets') {
     const exs = plan.days.flatMap((d) => d.exercises).filter((e) => e.muscle === fix.muscle);
+    const dayOf = new Map(plan.days.flatMap((d) => d.exercises.map((e) => [e, d])));
+    // Al sumar, solo en días donde la serie extra cabe en el tiempo (si la sugerencia trae el tope).
+    const fitsOneMore = (e) => { if (!fix.max) return true; e.sets += 1; const ok = estimateMinutes(dayOf.get(e)) <= fix.max + 2; e.sets -= 1; return ok; };
     let left = fix.n;
     for (let guard = 0; left > 0 && guard < 50; guard++) {
       const sorted = fix.type === 'addSets'
-        ? exs.filter((e) => e.sets < cap).sort((a, b) => a.sets - b.sets)
+        ? exs.filter((e) => e.sets < cap && fitsOneMore(e)).sort((a, b) => a.sets - b.sets)
         : exs.filter((e) => e.sets > 2).sort((a, b) => (kindOf(a) === kindOf(b) ? b.sets - a.sets : kindOf(a) === 'i' ? -1 : 1));
       if (!sorted.length) break;
       sorted[0].sets += fix.type === 'addSets' ? 1 : -1;
@@ -142,12 +189,14 @@ export function applyFix(plan, fix, profile) {
   }
   if (fix.type === 'trimDay') {
     const d = plan.days[fix.day];
+    let changed = false;
     for (let guard = 0; estimateMinutes(d) > fix.max && guard < 40; guard++) {
       const c = d.exercises.filter((e) => e.sets > 2).sort((a, b) => (kindOf(a) === kindOf(b) ? b.sets - a.sets : kindOf(a) === 'i' ? -1 : 1))[0];
       if (!c) break;
       c.sets -= 1;
+      changed = true;
     }
-    return true;
+    return changed;
   }
   if (fix.type === 'reorder') {
     const d = plan.days[fix.day];
