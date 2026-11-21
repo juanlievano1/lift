@@ -489,7 +489,7 @@ export const e1rm = (kg, reps) => (kg > 0 && reps > 0 ? kg * repsFactor(reps) : 
 
 export function lastPerformance(sessions, name) {
   for (let i = sessions.length - 1; i >= 0; i--) {
-    const ex = sessions[i].exercises.find((e) => e.name === name);
+    const ex = sessions[i].exercises.find((e) => e.name === name && !e.skip); // "no contar" queda fuera
     if (ex && ex.sets.some((s) => s.done)) return { date: sessions[i].date, ex };
   }
   return null;

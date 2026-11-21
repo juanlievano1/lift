@@ -1,6 +1,7 @@
 import { db, update, uid, today, activePlan, exportJSON, importJSON, parseBackup, resetAll, requestPersistence } from './db.js';
 import { MUSCLES, GOALS, LEVELS, EQUIPMENT, EXERCISES, PRINCIPLES, PRIORITIES, barMinKg, exerciseDefaults, TIME_RANGES, timeRangeOf, timeLabel, estimateMinutes, generatePlan, SPLIT_OPTIONS, weeklyVolume, volumeTarget, suggestion, lastPerformance, e1rm, weightRateTarget, exerciseByName, MARK_LIFTS } from './science.js';
 import { lineChart, volumeBars } from './charts.js';
+import { exerciseSeries, strengthIndex, byMuscle, weekly, weekStreak, recomputePrs } from './progress.js';
 import { reviewRoutine, applyFix } from './routine.js';
 import { WEEKS, newProgram, ensureProgram, weekInfo, prescribe, unitOf, inUnit, fromUnit, numStr, fmtW, roundLoad, exerciseTrack, exerciseStatus, uniqueExercises, applyRec, dismissRec, blocksFor, planReport, applyReviewChanges } from './program.js';
 import { $, esc, fmtDate, n1, clone, toast, openModal, closeModal, modalOpen, actions, routes, setRenderer, go, avatar, squarePhoto } from './ui.js';
@@ -557,7 +558,7 @@ function finishSession() {
   const prs = [];
   for (const e of exs) {
     const best = Math.max(...e.sets.map((x) => e1rm(Number(x.kg), Number(x.reps))));
-    const prev = Math.max(0, ...s.sessions.flatMap((ss) => ss.exercises.filter((z) => z.name === e.name).flatMap((z) => z.sets.map((x) => e1rm(Number(x.kg), Number(x.reps))))));
+    const prev = Math.max(0, ...s.sessions.flatMap((ss) => ss.exercises.filter((z) => z.name === e.name && !z.skip).flatMap((z) => z.sets.map((x) => e1rm(Number(x.kg), Number(x.reps))))));
     if (best > 0 && prev > 0 && best > prev) prs.push(e.name);
   }
   const session = { id: a.id, date: a.date, planId: a.planId, dayId: a.dayId, dayName: a.dayName, week: a.week || null, durationMin: sessionMinutes(a), notes: a.notes || '', exercises: exs.map(({ hint, ...rest }) => rest), prs };
@@ -1112,8 +1113,56 @@ function viewProgreso() {
   const ST = { arriba: ['Por delante', 'good'], linea: ['Al día', 'ok'], abajo: ['Por debajo', 'warn'], sin: ['Sin datos', 'muted'] };
   const pct = (r) => (r == null ? '—' : `${r >= 1 ? '+' : ''}${n1((r - 1) * 100)} %`);
 
+  // Progreso general y por músculo/ejercicio (cálculos en progress.js; los registros "no contar" quedan fuera).
+  const series = exerciseSeries(s.sessions);
+  const idx = strengthIndex(series);
+  const muscles = byMuscle(series);
+  const weeks8 = weekly(s.sessions, 8);
+  const thisWeek = weeks8[weeks8.length - 1];
+  const avgSets = weeks8.slice(-5, -1).reduce((a, x) => a + x.sets, 0) / 4;
+  const maxSets = Math.max(1, ...weeks8.map((x) => x.sets));
+  const goalDays = plan?.days.length || Number(s.profile.days) || 0;
+  const streak = weekStreak(s.sessions);
+  const signed = (v) => `${v > 0.05 ? '+' : v < -0.05 ? '−' : ''}${n1(Math.abs(v))} %`;
+  const tone = (v) => (v == null ? 'muted' : v >= 1 ? 'good' : v <= -1 ? 'warn' : 'muted');
+  const dm = (ms) => new Date(ms).toLocaleDateString('es', { day: 'numeric', month: 'numeric' });
+
   main.innerHTML = `
   <header class="top"><h1>Progreso</h1></header>
+
+  <p class="eyebrow sect">Progreso general</p>
+  <section class="stats">
+    <div class="stat"><span class="eyebrow">Fuerza</span><b class="${tone(idx.now)}">${idx.now == null ? '—' : signed(idx.now)}</b>
+      <span class="muted">${idx.n ? `promedio de ${idx.n} ejercicio${idx.n === 1 ? '' : 's'} desde el ${esc(fmtDate(idx.since))}` : 'Se mide desde el segundo entreno de cada ejercicio'}</span></div>
+    <div class="stat"><span class="eyebrow">Constancia</span><b>${thisWeek.sessions}<small> / ${goalDays}</small></b>
+      <span class="muted">entrenos esta semana · ${streak} semana${streak === 1 ? '' : 's'} seguida${streak === 1 ? '' : 's'}</span></div>
+    <div class="stat"><span class="eyebrow">Volumen</span><b>${thisWeek.sets}<small> series</small></b>
+      <span class="muted">esta semana · media de 4 semanas: ${n1(avgSets)}${thisWeek.kg ? ` · ${String(Math.round(thisWeek.kg)).replace(/\B(?=(\d{3})+(?!\d))/g, '.')} kg movidos` : ''}</span></div>
+    <div class="stat"><span class="eyebrow">Peso corporal</span><b>${ws ? n1(ws.nowAvg) : '—'}<small> kg</small></b>
+      <span class="${ws?.rate == null ? 'muted' : ''}">${ws?.rate == null ? (ws ? 'media de 7 días' : 'Regístralo en Hoy') : `${ws.rate > 0 ? '+' : ''}${n1(ws.rate)} % por semana`}</span></div>
+  </section>
+
+  <section class="card">
+    <h3>Fuerza general</h3>
+    <p class="muted small">Cuánto ha cambiado tu fuerza, en promedio entre todos tus ejercicios, comparando cada uno con su primer registro.</p>
+    <div id="gchart"></div>
+    <p class="eyebrow">Series por semana (últimas 8)</p>
+    <div class="wbars" role="img" aria-label="Series por semana: ${weeks8.map((x) => x.sets).join(', ')}">${weeks8.map((x, k) => `<div class="${k === weeks8.length - 1 ? 'now' : ''}" title="Semana del ${dm(x.start)}: ${x.sessions} entreno${x.sessions === 1 ? '' : 's'}, ${x.sets} series"><span>${x.sets || ''}</span><i style="height:${Math.round((x.sets / maxSets) * 100)}%"></i><small>${dm(x.start)}</small></div>`).join('')}</div>
+  </section>
+
+  <p class="eyebrow sect">Por músculo y por ejercicio</p>
+  <section class="card">
+    <h3>Por músculo</h3>
+    ${muscles.length ? `<p class="muted small">Promedio de los ejercicios de cada músculo. Toca un músculo para ver sus ejercicios, y un ejercicio para ver su gráfica.</p>
+    ${muscles.map((g) => `<details class="day"><summary class="msum"><b>${esc(MUSCLES[g.muscle] || 'Otros')}</b> <span class="muted small">${g.exercises.length} ejercicio${g.exercises.length === 1 ? '' : 's'}</span><span class="chip ${g.pct == null ? '' : tone(g.pct) === 'muted' ? 'ok' : tone(g.pct)}">${g.pct == null ? 'Sin datos' : signed(g.pct)}</span></summary>
+      <ul class="mini">${g.exercises.map((it) => `<li><button class="link exlink" data-act="pickEx" data-name="${esc(it.name)}">${esc(it.name)}${it.pct > 75 || it.pct < -50 ? ' <span class="chip warn">¿Dato raro?</span>' : ''}</button><span class="${tone(it.pct)}">${it.pct == null ? `${it.n} registro${it.n === 1 ? '' : 's'}` : signed(it.pct)}</span></li>`).join('')}</ul></details>`).join('')}` : '<p class="empty">Completa tu primer entreno para ver tu progreso por músculo.</p>'}
+  </section>
+
+  <section class="card" id="exprog">
+    <h3>Por ejercicio</h3>
+    ${names.length ? `<select id="exsel" aria-label="Ejercicio">${names.map((n) => `<option ${n === progressExercise ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
+    <div id="echart"></div><div id="ebest"></div>` : `<p class="empty">Completa tu primer entreno para ver tu progreso de fuerza.</p>`}
+  </section>
 
   ${tracked ? `
   <section class="card">
@@ -1136,13 +1185,7 @@ function viewProgreso() {
   </section>
 
   <section class="card">
-    <h3>Fuerza por ejercicio</h3>
-    ${names.length ? `<select id="exsel" aria-label="Ejercicio">${names.map((n) => `<option ${n === progressExercise ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
-    <div id="echart"></div><div id="ebest"></div>` : `<p class="empty">Completa tu primer entreno para ver tu progreso de fuerza.</p>`}
-  </section>
-
-  <section class="card">
-    <h3>Series de los últimos 7 días</h3>
+    <h3>Series por músculo (últimos 7 días)</h3>
     <p class="muted small">Series hechas por músculo (secundario = 0,5). Zona sombreada = rango recomendado para tu nivel.</p>
     ${volumeBars(Object.keys(MUSCLES).map((m) => { const [lo, hi] = volumeTarget(s.profile.level, m); return { label: MUSCLES[m], value: real[m], lo, hi }; }))}
   </section>
@@ -1151,9 +1194,9 @@ function viewProgreso() {
     <h3>Historial</h3>
     ${s.sessions.length ? [...s.sessions].reverse().slice(0, 40).map((x) => `
     <details class="day"><summary><b>${esc(x.dayName)}</b> <span class="muted small">${fmtDate(x.date)} · ${x.durationMin} min · ${x.exercises.reduce((a, e) => a + e.sets.length, 0)} series${x.prs?.length ? ' · 🏆' : ''}</span></summary>
-      <ul class="mini">${x.exercises.map((e) => `<li><span>${esc(e.name)}</span><span class="muted">${e.sets.map((z) => `${z.kg === '' ? '' : numStr(inUnit(z.kg, unitFor(e.name)))}×${z.reps}`).join(', ')} ${unitFor(e.name)}</span></li>`).join('')}</ul>
+      <ul class="mini">${x.exercises.map((e) => `<li><span>${esc(e.name)}${e.skip ? ' <span class="chip">No cuenta</span>' : ''}</span><span class="muted">${e.sets.map((z) => `${z.kg === '' ? '' : numStr(inUnit(z.kg, unitFor(e.name)))}×${esc(z.reps)}`).join(', ')} ${unitFor(e.name)}</span></li>`).join('')}</ul>
       ${x.notes ? `<p class="muted small">${esc(x.notes)}</p>` : ''}
-      <button class="link danger" data-act="delSession" data-id="${x.id}">Eliminar entreno</button>
+      <div class="actions wrap"><button class="link" data-act="editSession" data-id="${esc(x.id)}">Editar</button><button class="link danger" data-act="delSession" data-id="${esc(x.id)}">Eliminar entreno</button></div>
     </details>`).join('') : '<p class="empty">Aún no hay entrenos.</p>'}
   </section>`;
 
@@ -1161,12 +1204,68 @@ function viewProgreso() {
     renderPlanChart(plan);
     $('#psel').addEventListener('change', (e) => { planExercise = e.target.value; viewProgreso(); });
   }
+  if (idx.points.length >= 2) lineChart($('#gchart'), { unit: '%', series: [{ name: 'Fuerza general (cambio desde el inicio)', kind: 'line', points: idx.points }] });
+  else $('#gchart').innerHTML = '<p class="empty">Con dos entrenos de un mismo ejercicio aparece aquí tu línea de fuerza.</p>';
   if (ws) lineChart($('#wchart'), { unit: 'kg', series: [{ name: 'Pesaje', kind: 'dots', points: ws.w.map((w) => ({ x: w.date, y: w.kg })) }, { name: 'Media 7 días', kind: 'line', points: ws.series }] });
   else $('#wchart').innerHTML = '<p class="empty">Registra tu peso en Hoy.</p>';
   if (names.length) {
     renderExerciseChart();
     $('#exsel').addEventListener('change', (e) => { progressExercise = e.target.value; renderExerciseChart(); });
   }
+}
+
+// ---------- Editar un entreno del historial ----------
+// Para corregir un dato mal anotado o hecho en otra máquina (p. ej. una polea con otra relación de poleas):
+// se pueden cambiar la fecha, los kg y las reps de cada serie, o marcar un ejercicio como "No contar",
+// que lo deja en el historial pero fuera de objetivos, récords y gráficas.
+function openSessionEdit(id) {
+  const x = db().sessions.find((z) => z.id === id);
+  if (!x) return;
+  openModal(`<h2>Editar entreno</h2>
+    <p class="muted small">${esc(x.dayName)} · ${esc(fmtDate(x.date))}</p>
+    <label>Fecha<input id="esdate" type="date" value="${esc(x.date)}" max="${today()}"></label>
+    ${x.exercises.map((e, i) => { const u = unitFor(e.name); const noKg = e.sets.every((z) => z.kg === '' || z.kg == null); return `
+    <div class="esx">
+      <div class="exhead"><b>${esc(e.name)}</b><label class="switch small"><input type="checkbox" data-eskip="${i}" ${e.skip ? 'checked' : ''}> No contar</label></div>
+      ${e.sets.map((z, j) => `<div class="esrow"><span class="num">${j + 1}</span>
+        <input type="text" inputmode="decimal" data-ekg="${i}-${j}" value="${z.kg === '' || z.kg == null ? '' : numStr(inUnit(z.kg, u))}" placeholder="${noKg ? '—' : u}" aria-label="${esc(e.name)}, serie ${j + 1}: peso en ${u}"><span class="muted">${u} ×</span>
+        <input type="text" inputmode="numeric" data-ereps="${i}-${j}" value="${esc(z.reps)}" aria-label="${esc(e.name)}, serie ${j + 1}: repeticiones"><span class="muted">reps</span></div>`).join('')}
+    </div>`; }).join('')}
+    <p class="muted small"><b>No contar:</b> el ejercicio se queda en el historial, pero la app calcula tus pesos, récords y gráficas como si ese día no lo hubieras hecho. Úsalo si fue en otra máquina o no sabes el peso real. Para quitar una serie, deja sus reps vacías.</p>
+    <p class="formerr" id="eserr" role="alert" hidden></p>
+    <button class="btn primary big" data-act="saveSessionEdit" data-id="${esc(x.id)}">Guardar cambios</button>`);
+}
+function saveSessionEdit(id) {
+  const x = db().sessions.find((z) => z.id === id);
+  const m = $('#modal');
+  if (!x) return closeModal();
+  const fail = (msg) => { const el = $('#eserr'); el.textContent = msg; el.hidden = false; };
+  const date = $('#esdate').value;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today()) return fail('Elige una fecha válida (no puede ser futura).');
+  const exercises = [];
+  for (const [i, e] of x.exercises.entries()) {
+    const u = unitFor(e.name);
+    const sets = [];
+    for (const [j, z] of e.sets.entries()) {
+      const repsTxt = m.querySelector(`[data-ereps="${i}-${j}"]`).value.trim();
+      if (!repsTxt) continue; // reps vacías = quitar la serie
+      const reps = parseNum(repsTxt), kgTxt = m.querySelector(`[data-ekg="${i}-${j}"]`).value.trim(), kg = parseNum(kgTxt);
+      if (!(reps >= 1 && reps <= 200) || !Number.isInteger(reps)) return fail(`${e.name}, serie ${j + 1}: las reps deben ser un número entero.`);
+      if (kgTxt && !(kg >= 0 && kg <= 2000)) return fail(`${e.name}, serie ${j + 1}: revisa el peso.`);
+      sets.push({ ...z, kg: kgTxt ? fromUnit(kg, u) : '', reps, done: true });
+    }
+    if (sets.length) exercises.push({ ...e, sets, skip: m.querySelector(`[data-eskip="${i}"]`).checked || undefined });
+  }
+  if (!exercises.length) return fail('El entreno quedaría vacío. Si quieres quitarlo, usa «Eliminar entreno».');
+  update((st) => {
+    const s0 = st.sessions.find((z) => z.id === id);
+    s0.date = date; s0.exercises = exercises;
+    st.sessions.sort((a, b) => String(a.date).localeCompare(String(b.date))); // el historial sigue en orden de fecha
+    recomputePrs(st.sessions); // los récords se recalculan con los datos corregidos
+  });
+  closeModal();
+  toast('Entreno corregido: tus objetivos y gráficas ya usan los datos nuevos');
+  const y = scrollY; render(); window.scrollTo(0, y);
 }
 
 function renderPlanChart(plan) {
@@ -1187,26 +1286,20 @@ function renderPlanChart(plan) {
 }
 
 function renderExerciseChart() {
-  const s = db();
-  const pts = [];
-  let best = null;
-  for (const x of s.sessions) {
-    const e = x.exercises.find((z) => z.name === progressExercise);
-    if (!e) continue;
-    let top = 0;
-    for (const st of e.sets) {
-      const v = e1rm(Number(st.kg), Number(st.reps));
-      if (v > top) top = v;
-      if (!best || v > best.v) best = { v, kg: st.kg, reps: st.reps, date: x.date };
-    }
-    if (top > 0) {
-      const prev = pts.find((p) => p.x === x.date);
-      if (prev) prev.y = Math.max(prev.y, top); else pts.push({ x: x.date, y: top });
-    }
-  }
+  const it = exerciseSeries(db().sessions).get(progressExercise);
   const u = unitFor(progressExercise);
-  lineChart($('#echart'), { unit: u, series: [{ name: 'Fuerza (peso a 1 repetición)', kind: 'line', points: pts.map((p) => ({ ...p, y: inUnit(p.y, u) })) }] });
-  $('#ebest').innerHTML = best && best.v > 0 ? `<p class="muted small">Mejor serie: <b>${fmtW(best.kg, u)} × ${best.reps}</b> (${fmtDate(best.date)}) · equivale a ≈ ${fmtW(best.v, u)} a 1 repetición</p>` : '';
+  if (!it || !it.points.length) {
+    $('#echart').innerHTML = '<p class="empty">Este ejercicio no tiene registros que cuenten.</p>';
+    $('#ebest').innerHTML = '';
+    return;
+  }
+  // Con peso: fuerza estimada. Sin peso (peso corporal): la mejor serie en repeticiones (antes no se graficaba).
+  const reps = !it.weighted;
+  lineChart($('#echart'), { unit: reps ? 'reps' : u, decimals: reps ? 0 : 1, series: [{ name: reps ? 'Mejor serie (repeticiones)' : 'Fuerza (peso a 1 repetición)', kind: 'line', points: it.points.map((p) => ({ ...p, y: reps ? p.y : inUnit(p.y, u) })) }] });
+  const best = it.best;
+  const change = it.pct == null ? '' : `Cambio desde el primer registro: <b>${it.pct > 0.05 ? '+' : it.pct < -0.05 ? '−' : ''}${n1(Math.abs(it.pct))} %</b> · `;
+  $('#ebest').innerHTML = best ? `<p class="muted small">${change}Mejor serie: <b>${reps ? `${esc(best.reps)} reps` : `${fmtW(best.kg, u)} × ${esc(best.reps)}`}</b> (${fmtDate(best.date)})${reps ? '' : ` · equivale a ≈ ${fmtW(best.v, u)} a 1 repetición`}</p>
+    <p class="muted small">¿Un dato salió raro (otra máquina, peso mal anotado)? Corrígelo en <b>Historial → Editar</b>, o márcalo como «No contar».</p>` : '';
 }
 
 // ---------- Perfil ----------
@@ -1609,7 +1702,10 @@ Las series que ya marcaste se conservan.`)) {
   pickPlanEx: (el) => { planExercise = el.dataset.name; viewProgreso(); document.querySelector('#pchart')?.scrollIntoView({ block: 'center' }); },
 
   delWeight: (el) => { update((st) => (st.weights = st.weights.filter((w) => w.id !== el.dataset.id))); render(); },
-  delSession: (el) => { if (confirm('¿Eliminar este entreno del historial?')) { update((st) => (st.sessions = st.sessions.filter((x) => x.id !== el.dataset.id))); render(); } },
+  delSession: (el) => { if (confirm('¿Eliminar este entreno del historial?')) { update((st) => { st.sessions = st.sessions.filter((x) => x.id !== el.dataset.id); recomputePrs(st.sessions); }); const y = scrollY; render(); window.scrollTo(0, y); } },
+  editSession: (el) => openSessionEdit(el.dataset.id),
+  saveSessionEdit: (el) => saveSessionEdit(el.dataset.id),
+  pickEx: (el) => { progressExercise = el.dataset.name; const y = scrollY; viewProgreso(); window.scrollTo(0, y); document.querySelector('#exprog')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
   export: () => {
     const blob = new Blob([exportJSON()], { type: 'application/json' });
     const a = document.createElement('a');

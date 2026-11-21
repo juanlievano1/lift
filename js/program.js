@@ -109,6 +109,10 @@ export function setMetric(set, bw) {
   return e1rm(Number(set.kg) || 0, reps + rir);
 }
 
+// El registro de un ejercicio en un entreno, si cuenta. Los marcados "no contar" (otra máquina, dato dudoso)
+// siguen en el historial pero no entran en ningún cálculo: objetivos, récords ni gráficas.
+export const logOf = (session, name) => session.exercises.find((z) => z.name === name && !z.skip);
+
 function sessionMetric(exLog, bw) {
   return Math.max(0, ...exLog.sets.filter((s) => s.done !== false).map((s) => setMetric(s, bw)));
 }
@@ -119,13 +123,13 @@ export function baseline(plan, sessions, ex) {
   const start = isoToMs(plan.program.startDate);
   const inPlan = sessions.filter((s) => s.planId === plan.id && isoToMs(s.date) >= start);
   for (const s of inPlan) {
-    const e = s.exercises.find((z) => z.name === ex.name);
+    const e = logOf(s, ex.name);
     if (e) { const m = sessionMetric(e, bw); if (m > 0) return { metric: m, week: weekOf(plan, s.date) }; }
   }
   for (let i = sessions.length - 1; i >= 0; i--) {
     const s = sessions[i];
     if (isoToMs(s.date) >= start || isoToMs(s.date) < start - 56 * DAY) continue;
-    const e = s.exercises.find((z) => z.name === ex.name);
+    const e = logOf(s, ex.name);
     if (e) { const m = sessionMetric(e, bw); if (m > 0) return { metric: m, week: 1 }; }
   }
   return null;
@@ -137,6 +141,50 @@ export function plannedMetric(plan, sessions, ex, w) {
   const rate = weeklyRate(plan.program.level, plan.program.goal, ex.kind || exerciseByName(ex.name)?.kind, isBodyweight(ex));
   const adj = plan.program.adjust[ex.name] || 1;
   return base.metric * (1 + rate) ** progressWeeks(plan, base.week, w) * adj;
+}
+
+// Tu nivel de HOY en un ejercicio: la mejor marca de tus 2 últimos entrenos (de las últimas 9 semanas).
+// De aquí sale el objetivo de cada sesión, así que:
+//  - un mal día aislado no te baja el objetivo (cuenta el mejor de los dos);
+//  - una marca nueva lo sube enseguida;
+//  - un dato viejo o equivocado deja de pesar en cuanto hay 2 entrenos más recientes.
+// (Antes el objetivo salía para siempre de la PRIMERA sesión del plan más una subida prevista.)
+export function recentLevel(plan, sessions, ex, w) {
+  const bw = isBodyweight(ex);
+  const end = isoToMs(plan.program.startDate) + Math.max(1, w) * 7 * DAY; // fin de la semana w
+  const sorted = [...sessions].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const pts = [];
+  for (let i = sorted.length - 1; i >= 0 && pts.length < 2; i--) {
+    const s = sorted[i];
+    const ms = isoToMs(s.date);
+    if (!(ms <= end) || ms < end - 63 * DAY) continue;
+    const e = logOf(s, ex.name);
+    const m = e ? sessionMetric(e, bw) : 0;
+    if (m > 0) pts.push({ metric: m, week: weekOf(plan, s.date), date: s.date });
+  }
+  if (!pts.length) {
+    // Llevas más de 9 semanas sin hacer este ejercicio: se parte de tu última marca con un 10 % menos
+    // (algo se pierde al parar), en vez de un peso genérico como si nunca lo hubieras hecho.
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const s = sorted[i];
+      if (!(isoToMs(s.date) <= end)) continue;
+      const e = logOf(s, ex.name);
+      const m = e ? sessionMetric(e, bw) : 0;
+      if (m > 0) return { metric: m * 0.9, week: w, date: s.date, stale: true };
+    }
+    return null;
+  }
+  return pts.reduce((a, b) => (b.metric > a.metric ? b : a));
+}
+
+// Objetivo de la semana w: tu nivel reciente más la subida prevista por las semanas que han pasado desde
+// esa marca (máximo 2: no se proyecta progreso por semanas sin entrenar el ejercicio).
+export function targetMetric(plan, sessions, ex, w) {
+  const lvl = recentLevel(plan, sessions, ex, w);
+  if (!lvl) return null;
+  const rate = weeklyRate(plan.program.level, plan.program.goal, ex.kind || exerciseByName(ex.name)?.kind, isBodyweight(ex));
+  const weeks = Math.min(2, progressWeeks(plan, Math.max(0, Math.min(lvl.week, w)), w));
+  return lvl.metric * (1 + rate) ** weeks;
 }
 
 // Redondea al incremento real del equipo y respeta el mínimo físico (la barra sola ya pesa 20 kg).
@@ -209,7 +257,8 @@ export function prescribe(plan, sessions, ex, w, profile = null) {
   let targetReps = Math.round((repMin + repMax) / 2);
   const bw = isBodyweight(ex);
   const unit = unitOf(profile, ex.name);
-  const pm = plannedMetric(plan, sessions, ex, info.week);
+  // Se recalcula en cada sesión con tus entrenos recientes (no con la primera sesión del plan).
+  const pm = targetMetric(plan, sessions, ex, Math.max(Number(w) || 1, info.week)); // semana real (el plan puede haber terminado)
   let kg = null, text;
   if (pm == null) {
     const est = !bw && estimateStart1RM(profile, ex.name);
@@ -244,13 +293,22 @@ export function prescribe(plan, sessions, ex, w, profile = null) {
 // todas las series, subes el peso y vuelves al mínimo. Si te quedas muy corto, la carga baja.
 const LOWER_BODY = new Set(['cuadriceps', 'isquios', 'gluteos', 'gemelos']);
 
-function lastLog(sessions, name) {
-  for (let i = sessions.length - 1; i >= 0; i--) {
-    const e = sessions[i].exercises.find((x) => x.name === name);
+// Los últimos n registros que cuentan de un ejercicio, del más reciente al más antiguo.
+function lastLogs(sessions, name, n = 2) {
+  const out = [];
+  for (let i = sessions.length - 1; i >= 0 && out.length < n; i--) {
+    const e = logOf(sessions[i], name);
     const done = e?.sets.filter((x) => x.done !== false && x.reps !== '' && x.reps != null);
-    if (done?.length) return { date: sessions[i].date, sets: done };
+    if (done?.length) out.push({ date: sessions[i].date, sets: done });
   }
-  return null;
+  return out;
+}
+// Resumen de un registro: peso más alto y las reps hechas con ese peso.
+function topSets(log) {
+  const top = Math.max(...log.sets.map((x) => Number(x.kg) || 0));
+  const atTop = log.sets.filter((x) => (Number(x.kg) || 0) === top);
+  const reps = atTop.map((x) => Number(x.reps) || 0);
+  return { top, atTop, reps, minReps: Math.min(...reps) };
 }
 
 // Salto de peso en kg (en libras: 5 lb, que es lo mínimo que sube un gimnasio en libras).
@@ -274,7 +332,9 @@ export function prescribeDouble(plan, sessions, ex, profile = null) {
   const unit = unitOf(profile, ex.name);
   const W = (kg) => fmtW(kg, unit);
   const base = { sets, repMin, repMax, rir, restSec, deload: false };
-  const last = lastLog(sessions, ex.name);
+  // Se miran los 2 últimos entrenos del ejercicio: el más reciente decide si sube el peso; el anterior sirve
+  // para distinguir un mal día (se mantiene el peso) de un peso que de verdad quedó grande (se baja).
+  const [last, before] = lastLogs(sessions, ex.name, 2);
 
   if (!last) {
     const target = Math.min(repMax, repMin + 1);
@@ -287,16 +347,18 @@ export function prescribeDouble(plan, sessions, ex, profile = null) {
     return { ...base, targetReps: target, kg: null, text: bw ? `Primera vez: haz ${target}–${repMax} reps por serie dejando ${rir} en reserva.` : `Primera vez: elige un peso con el que hagas ${target} reps dejando ${rir} en reserva.` };
   }
 
-  const kgs = last.sets.map((x) => Number(x.kg) || 0);
-  const top = Math.max(...kgs);
-  const atTop = last.sets.filter((x) => (Number(x.kg) || 0) === top);
-  const reps = atTop.map((x) => Number(x.reps) || 0);
-  const minReps = Math.min(...reps);
+  const { top, atTop, reps, minReps } = topSets(last);
   const avgRir = atTop.reduce((a, x) => a + (Number(x.rir) || 0), 0) / atTop.length;
   const completed = atTop.length >= sets && minReps >= repMax;
+  // El entreno anterior, solo si fue con el mismo peso (si no, no es comparable serie a serie).
+  const prev = before ? topSets(before) : null;
+  const samePrev = prev && Math.abs(prev.top - top) < 0.01 ? prev : null;
+  // ¿La vez pasada rendiste menos que la anterior con el mismo peso? Entonces el objetivo es recuperar lo que ya hacías.
+  const dipped = !!samePrev && samePrev.minReps > minReps;
 
   if (bw) {
     if (completed) return { ...base, targetReps: repMax, kg: null, text: `Completaste ${repMax} reps en todas las series: hazlo más difícil (lastre, pausa o tempo lento) y vuelve a ${repMin}.` };
+    if (dipped) { const t = Math.min(repMax, samePrev.minReps); return { ...base, targetReps: t, kg: null, text: `Busca ${t} reps en cada serie: ya las hiciste hace dos entrenos (${samePrev.reps.join(', ')}); la vez pasada fueron ${reps.join(', ')}.` }; }
     return { ...base, targetReps: Math.min(repMax, minReps + 1), kg: null, text: `Busca ${Math.min(repMax, minReps + 1)} reps en cada serie (la vez pasada: ${reps.join(', ')}).` };
   }
   if (completed) {
@@ -309,14 +371,31 @@ export function prescribeDouble(plan, sessions, ex, profile = null) {
     return { ...base, targetReps: repMin, kg, text: `¡Subes peso! Completaste ${repMax} reps en todas las series: ${numStr(inUnit(top, unit))} → ${W(kg)}${hand}. Vuelve a ${repMin} reps y sube desde ahí.` };
   }
   if (minReps < repMin - 1) {
-    let kg = roundLoad(top * 0.9, ex, unit);
+    // Te quedaste corto. Antes bastaba una vez para bajar el 10 %; ahora depende de los 2 últimos entrenos:
+    //  - muy lejos del rango (4 o más reps por debajo): el peso quedó grande, se baja ya el 10 %;
+    //  - primera vez con ese ejercicio (aún calibrando): se baja el 10 %;
+    //  - venías bien con ese peso, o acabas de subirlo: fue un mal día o el salto aún cuesta → se mantiene y se reintenta;
+    //  - dos entrenos seguidos corto con el mismo peso: se baja, pero solo un salto (no por debajo de lo que ya dominabas).
+    const far = minReps <= repMin - 4;
+    const twice = !!samePrev && samePrev.minReps < repMin - 1;
+    if (!far && before && !twice) {
+      const t = dipped ? Math.min(repMax, Math.max(1, samePrev.minReps)) : Math.max(1, minReps + 1);
+      const why = samePrev
+        ? `La vez pasada te costó más (${reps.join(', ')} reps; la anterior hiciste ${samePrev.reps.join(', ')}): puede ser un mal día.`
+        : `El peso nuevo te costó (${reps.join(', ')} reps), es normal al subir.`;
+      return { ...base, targetReps: t, kg: top, text: `${why} Mantén ${W(top)}${hand} y busca ${t} reps. Si vuelve a pasar, la app baja el peso.` };
+    }
+    let kg = far || !twice ? roundLoad(top * 0.9, ex, unit) : roundLoad(Math.max(top * 0.9, top - loadStep(ex, unit)), ex, unit);
     // Con pesos livianos el 10 % redondea al mismo peso: se baja un salto completo si existe uno más liviano.
     if (kg >= top) { const lower = roundLoad(top - loadStep(ex, unit), ex, unit); if (lower > 0 && lower < top) kg = lower; }
     if (kg >= top) return { ...base, targetReps: Math.max(1, minReps + 1), kg: top, text: `La vez pasada te quedaste corto (${reps.join(', ')} reps) y no se puede bajar más el peso. Mantén ${W(top)}${hand} y busca ${Math.max(1, minReps + 1)} reps; si sigue costando, cambia a una versión más liviana (⇄ Cambiar ejercicio).` };
-    return { ...base, targetReps: repMin, kg, text: `La vez pasada te quedaste corto (${reps.join(', ')} reps). Baja a ${W(kg)}${hand} y busca ${repMin} reps con buena técnica.` };
+    return { ...base, targetReps: repMin, kg, text: `${twice ? `Llevas dos entrenos por debajo del rango con ${W(top)} (${samePrev.reps.join(', ')} y ${reps.join(', ')} reps)` : `La vez pasada te quedaste corto (${reps.join(', ')} reps)`}. Baja a ${W(kg)}${hand} y busca ${repMin} reps con buena técnica.` };
   }
-  const target = Math.min(repMax, Math.max(repMin, minReps + 1));
-  return { ...base, targetReps: target, kg: top, text: `Mantén ${W(top)}${hand} y busca ${target} reps en cada serie (la vez pasada: ${reps.join(', ')}). Al llegar a ${repMax} en todas, subes peso.` };
+  // Dentro del rango: una rep más que la vez pasada... o, si la vez pasada rendiste menos que la anterior, recuperar esa marca.
+  const target = Math.min(repMax, Math.max(repMin, dipped ? samePrev.minReps : minReps + 1));
+  return { ...base, targetReps: target, kg: top, text: dipped
+    ? `Mantén ${W(top)}${hand} y busca ${target} reps en cada serie: ya las hiciste hace dos entrenos (${samePrev.reps.join(', ')}); la vez pasada fueron ${reps.join(', ')}. Al llegar a ${repMax} en todas, subes peso.`
+    : `Mantén ${W(top)}${hand} y busca ${target} reps en cada serie (la vez pasada: ${reps.join(', ')}). Al llegar a ${repMax} en todas, subes peso.` };
 }
 
 // Series de plan vs real para un ejercicio (para graficar).
@@ -325,7 +404,7 @@ export function exerciseTrack(plan, sessions, ex) {
   const real = [];
   for (const s of sessions) {
     if (s.planId !== plan.id) continue;
-    const e = s.exercises.find((z) => z.name === ex.name);
+    const e = logOf(s, ex.name);
     if (!e) continue;
     const m = sessionMetric(e, bw);
     const kg = Math.max(0, ...e.sets.filter((z) => z.done !== false).map((z) => Number(z.kg) || 0));
@@ -382,7 +461,8 @@ export function review(plan, sessions, { now, profile, weightRate }) {
     recs.push({ key: 'suave', level: 'info', title: `Llevas ${w} semanas seguidas`, text: 'Una semana suave cada 6–8 semanas ayuda a recuperarte: esta semana haz la mitad de las series con el mismo peso y deja 3–4 reps en reserva. La siguiente retomas donde ibas.' });
   }
   const ups = doble ? [] : tracked.filter((s) => s.streak === 'arriba');
-  if (ups.length) recs.push({ key: 'up', level: 'good', title: `Vas por delante en ${ups.length} ejercicio${ups.length > 1 ? 's' : ''}`, text: `${ups.map((s) => s.ex.name).join(', ')}: llevas dos sesiones por encima de lo previsto. La app sube los objetivos para que sigan siendo un reto.`, action: 'recal', payload: ups.map((s) => s.ex.name), cta: 'Subir objetivos' });
+  // Los objetivos ya se recalculan solos en cada sesión: estos avisos son solo informativos (sin botón).
+  if (ups.length) recs.push({ key: 'up', level: 'good', title: `Vas por delante en ${ups.length} ejercicio${ups.length > 1 ? 's' : ''}`, text: `${ups.map((s) => s.ex.name).join(', ')}: llevas dos entrenos por encima del plan original. Tus objetivos ya subieron con tus marcas recientes.` });
 
   const downs = doble ? [] : tracked.filter((s) => s.streak === 'abajo');
   const fatigue = !doble && tracked.length >= 3 && tracked.filter((s) => s.status === 'abajo').length / tracked.length >= 0.5;
@@ -396,8 +476,7 @@ export function review(plan, sessions, { now, profile, weightRate }) {
     const hard = info.inBlock === 3;
     recs.push({ key: 'down', level: 'warn', title: `Por debajo del plan en ${downs.length} ejercicio${downs.length > 1 ? 's' : ''}`, text: hard
       ? `${downs.map((s) => s.ex.name).join(', ')}: es la semana más exigente del bloque; es normal rendir un poco menos. La descarga de la semana ${nextDeload} debería devolverte el rendimiento.`
-      : `${downs.map((s) => s.ex.name).join(', ')}: dos sesiones seguidas por debajo. La app ajusta los objetivos a tu nivel real para que la progresión sea alcanzable.`,
-      action: hard ? null : 'recal', payload: downs.map((s) => s.ex.name), cta: hard ? null : 'Ajustar objetivos' });
+      : `${downs.map((s) => s.ex.name).join(', ')}: dos entrenos seguidos por debajo del plan original. Tus objetivos ya se ajustaron a tu nivel real; si fue un dato mal anotado, corrígelo en Progreso → Historial.` });
   }
 
   // Adherencia: sesiones hechas vs previstas en las semanas ya cerradas.
