@@ -238,6 +238,7 @@ function viewHoy() {
 
   ${coachBanner()}
   ${installCard(s)}
+  ${shareNoticeCard()}
 
   ${doneToday && !s.activeSession ? `
   <section class="card donetoday"><p><b>✓ Hecho hoy:</b> ${esc(doneToday.dayName)} · ${Number(doneToday.durationMin) || 0} min · ${doneToday.exercises.reduce((n, e) => n + e.sets.length, 0)} series${doneToday.prs?.length ? ` · 🏆 ${doneToday.prs.length} récord${doneToday.prs.length === 1 ? '' : 's'}` : ''}</p></section>` : ''}
@@ -596,23 +597,35 @@ function showSummary(session, prs) {
     <p class="muted">${esc(session.dayName)} · ${session.durationMin} min · ${sets} serie${sets === 1 ? '' : 's'} · ${session.exercises.length} ejercicio${session.exercises.length === 1 ? '' : 's'}</p>
     ${prs.length ? `<p class="prs">🏆 Récord personal en ${prs.map(esc).join(', ')}</p>` : ''}
     ${weekLineSummary()}
+    ${shareNoticePending() ? '<p class="small">👥 Tus amigos ven este entreno (día, duración, series y récords). <button class="link" data-act="shareOff">No compartir</button></p>' : ''}
     <p class="small">${first ? 'Lo más difícil ya lo hiciste: empezar. La próxima vez la app ajusta los pesos con lo que registraste hoy.' : 'La próxima vez la app ajusta los pesos con lo que registraste hoy.'}</p>
     <button class="btn primary big" data-act="closeModal">Listo</button></div>`);
 }
 
-// Compartir con amigos: la primera vez se pregunta; luego se respeta lo que elegiste (se cambia en Perfil).
+// Compartir con amigos: viene ACTIVADO por defecto (antes se preguntaba y casi nadie llegaba a activarlo).
+// Quien no quiera, lo apaga con un toque: en el aviso de Hoy, en el resumen del primer entreno o en Perfil.
+// Quien ya había dicho que no (shareActivity === false) sigue sin compartir.
+const sharesActivity = () => db().settings.shareActivity !== false;
+// ¿Falta avisarle a esta persona que sus amigos ven sus entrenos? (No eligió nada todavía.)
+const shareNoticePending = () => cloud.enabled && !!cloud.user && db().settings.shareActivity === undefined && !db().settings.shareNotice;
+function shareNoticeCard() {
+  if (!shareNoticePending() || !db().plans.length) return '';
+  return `<section class="card tipcard"><p class="small"><b>👥 Tus amigos ven tus entrenos y tu rutina.</b> De cada entreno: día, duración, series y récords. De tu rutina: días y ejercicios. Tus notas y tu peso corporal nunca se comparten.</p>
+    <div class="actions wrap"><button class="btn ghost sm" data-act="shareOk">Entendido</button><button class="btn ghost sm" data-act="shareOff">No compartir</button></div></section>`;
+}
 function sharePlan(plan) {
-  if (db().settings.shareActivity === false) return;
+  if (!sharesActivity()) return;
   cloud.publish('plan', { planName: plan.name, days: plan.days.length, source: plan.source, weeks: plan.program?.repMode === 'doble' ? null : 12 });
 }
 function shareSession(session) {
-  if (!cloud.enabled || !cloud.user) return;
-  const pref = db().settings.shareActivity;
-  if (pref === false) return;
-  if (pref === true) return publishSession(session);
-  const ok = confirm('¿Quieres que tus amigos vean tus entrenos (día, duración, series y récords) y tu rutina? Tus notas y tu peso no se comparten. Puedes cambiarlo en Perfil → Qué ven tus amigos.');
-  update((st) => { st.settings.shareActivity = ok; if (st.settings.shareRoutine === undefined) st.settings.shareRoutine = ok; });
-  if (ok) publishSession(session);
+  if (!cloud.enabled || !cloud.user || !sharesActivity()) return;
+  publishSession(session);
+}
+// "No compartir": apaga las dos cosas, quita lo que aún no se había enviado y borra lo ya publicado.
+async function stopSharing() {
+  update((st) => { st.settings.shareActivity = false; st.settings.shareRoutine = false; st.settings.shareNotice = true; st.outbox = (st.outbox || []).filter((i) => i.kind !== 'session' && i.kind !== 'plan'); });
+  toast('Listo: tus entrenos y tu rutina ya no se comparten. Puedes cambiarlo en Perfil.');
+  try { await cloud.clearActivity(); } catch (e) { console.warn('No se pudo borrar lo ya publicado', e); toast('No se pudo borrar lo que ya se había publicado. Inténtalo de nuevo con conexión desde Perfil.'); }
 }
 
 // ---------- Temporizador de descanso ----------
@@ -1339,7 +1352,8 @@ function viewPerfil() {
 
   ${acc ? `<section class="card">
     <h3>Qué ven tus amigos</h3>
-    <label class="switch"><input type="checkbox" data-setting="shareActivity" ${s.settings.shareActivity === true ? 'checked' : ''}> Mis entrenos</label>
+    <p class="muted small">Viene activado para que tu parche vea tu avance. Si prefieres no compartir, apágalo aquí.</p>
+    <label class="switch"><input type="checkbox" data-setting="shareActivity" ${s.settings.shareActivity !== false ? 'checked' : ''}> Mis entrenos</label>
     <p class="muted small">Un resumen de cada entreno: día, duración, series, tus mejores series y récords. Con esto ven tu avance.</p>
     <label class="switch"><input type="checkbox" data-setting="shareRoutine" ${cloud.sharesRoutine() ? 'checked' : ''}> Mi rutina</label>
     <p class="muted small">Los días y ejercicios de tu rutina activa, con series y repeticiones. Tus pesos, notas y peso corporal nunca se comparten.</p>
@@ -1703,6 +1717,8 @@ Las series que ya marcaste se conservan.`)) {
 
   delWeight: (el) => { update((st) => (st.weights = st.weights.filter((w) => w.id !== el.dataset.id))); render(); },
   delSession: (el) => { if (confirm('¿Eliminar este entreno del historial?')) { update((st) => { st.sessions = st.sessions.filter((x) => x.id !== el.dataset.id); recomputePrs(st.sessions); }); const y = scrollY; render(); window.scrollTo(0, y); } },
+  shareOk: () => { update((st) => { st.settings.shareActivity = true; if (st.settings.shareRoutine === undefined) st.settings.shareRoutine = true; st.settings.shareNotice = true; }); render(); },
+  shareOff: async (el) => { const inModal = !!el.closest('#modal'); await stopSharing(); if (inModal) el.closest('p')?.remove(); else render(); },
   editSession: (el) => openSessionEdit(el.dataset.id),
   saveSessionEdit: (el) => saveSessionEdit(el.dataset.id),
   pickEx: (el) => { progressExercise = el.dataset.name; const y = scrollY; viewProgreso(); window.scrollTo(0, y); document.querySelector('#exprog')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
@@ -1758,7 +1774,8 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset.setting) {
-    update((st) => (st.settings[el.dataset.setting] = el.checked));
+    // Tocar un interruptor de "Qué ven tus amigos" cuenta como haber visto el aviso de compartir.
+    update((st) => { st.settings[el.dataset.setting] = el.checked; if (/^share/.test(el.dataset.setting)) st.settings.shareNotice = true; });
   } else if (el.dataset.bind) {
     // Inputs de series (entreno en curso)
     const i = +el.dataset.ex, j = +el.dataset.set;

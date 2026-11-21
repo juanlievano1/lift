@@ -364,7 +364,8 @@ export async function clearActivity() {
 
 // ---------- Rutina compartida con amigos ----------
 // Solo días y ejercicios de la rutina activa, y solo si la persona eligió compartirla (Perfil).
-export const sharesRoutine = () => { const s = db().settings; return s.shareRoutine ?? s.shareActivity === true; };
+// Por defecto se comparte (igual que los entrenos); quien lo apagó, o apagó los entrenos sin elegir aquí, no comparte.
+export const sharesRoutine = () => { const s = db().settings; return s.shareRoutine ?? s.shareActivity !== false; };
 function routineSnapshot() {
   const s = db();
   const p = s.plans.find((x) => x.id === s.activePlanId);
